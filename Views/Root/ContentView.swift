@@ -1,0 +1,163 @@
+import SwiftUI
+
+struct ContentView: View {
+    @StateObject private var playerManager = PlayerManager()
+    @StateObject private var favoritesManager = FavoritesManager()
+    @StateObject private var playlistsManager = PlaylistsManager()
+    @StateObject private var recentlyPlayedManager = RecentlyPlayedManager()
+    @StateObject private var settingsManager: SettingsManager
+    @StateObject private var themeManager: ThemeManager
+
+    @State private var selectedTab: AppTab = .favorites
+    @State private var showFullPlayer = false
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let settings = SettingsManager()
+        _settingsManager = StateObject(wrappedValue: settings)
+        _themeManager = StateObject(wrappedValue: ThemeManager(settings: settings))
+
+        let tabRaw = settings.defaultStartTab.rawValue
+        switch tabRaw {
+        case "Playlists": _selectedTab = State(initialValue: .playlists)
+        case "Search":    _selectedTab = State(initialValue: .search)
+        case "More":      _selectedTab = State(initialValue: .more)
+        default:          _selectedTab = State(initialValue: .favorites)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            themeManager.background
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                tabContent
+                    .frame(maxHeight: .infinity)
+
+                if playerManager.currentTrack != nil {
+                    MiniPlayerView(playerManager: playerManager) {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                            showFullPlayer = true
+                        }
+                    }
+                }
+
+                customTabBar
+            }
+
+            if showFullPlayer {
+                FullScreenPlayerView(
+                    playerManager: playerManager,
+                    favoritesManager: favoritesManager,
+                    playlistsManager: playlistsManager,
+                    recentlyPlayedManager: recentlyPlayedManager,
+                    themeManager: themeManager,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                            showFullPlayer = false
+                        }
+                    }
+                )
+                .transition(.move(edge: .bottom))
+                .zIndex(100)
+            }
+        }
+        .preferredColorScheme(themeManager.isDarkMode ? .dark : .light)
+        .onChange(of: settingsManager.defaultStartTab) { newValue in
+            switch newValue {
+            case .playlists: selectedTab = .playlists
+            case .search:    selectedTab = .search
+            case .more:      selectedTab = .more
+            case .favorites: selectedTab = .favorites
+            }
+        }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .background || newPhase == .inactive {
+                favoritesManager.flushPendingWrites()
+                playlistsManager.flushPendingWrites()
+                recentlyPlayedManager.flushPendingWrites()
+            }
+        }
+    }
+
+    // MARK: - Tab Content
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .favorites:
+            FavoritesView(
+                playerManager: playerManager,
+                favoritesManager: favoritesManager,
+                recentlyPlayedManager: recentlyPlayedManager,
+                themeManager: themeManager
+            )
+        case .playlists:
+            PlaylistsView(
+                playerManager: playerManager,
+                playlistsManager: playlistsManager,
+                recentlyPlayedManager: recentlyPlayedManager,
+                favoritesManager: favoritesManager,
+                themeManager: themeManager
+            )
+        case .search:
+            SearchView(
+                playerManager: playerManager,
+                recentlyPlayedManager: recentlyPlayedManager,
+                themeManager: themeManager,
+                settingsManager: settingsManager,
+                selectedTab: $selectedTab
+            )
+        case .more:
+            MoreView(
+                playerManager: playerManager,
+                settingsManager: settingsManager,
+                favoritesManager: favoritesManager,
+                playlistsManager: playlistsManager,
+                recentlyPlayedManager: recentlyPlayedManager,
+                themeManager: themeManager
+            )
+        }
+    }
+
+    // MARK: - Custom Tab Bar
+
+    private var customTabBar: some View {
+        HStack(spacing: 0) {
+            tabBarButton(tab: .favorites, icon: "heart", label: "Favorites")
+            tabBarButton(tab: .playlists, icon: "music.note.list", label: "Playlists")
+            tabBarButton(tab: .search, icon: "magnifyingglass", label: "Search")
+            tabBarButton(tab: .more, icon: "ellipsis", label: "More")
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
+        .background(themeManager.surface)
+    }
+
+    private var allowedFillIcons: Set<String> { ["heart"] }
+
+    private func tabBarButton(tab: AppTab, icon: String, label: String) -> some View {
+        Button {
+            selectedTab = tab
+        } label: {
+            VStack(spacing: 2) {
+                let selectedIcon = allowedFillIcons.contains(icon)
+                    ? "\(icon).fill"
+                    : icon
+                Image(systemName: selectedTab == tab ? selectedIcon : icon)
+                    .font(.system(size: 18, weight: selectedTab == tab ? .semibold : .regular))
+                    .frame(height: 22)
+                Text(label)
+                    .font(.system(size: 10, weight: selectedTab == tab ? .semibold : .regular))
+            }
+            .foregroundColor(selectedTab == tab ? themeManager.theme.accentColor : themeManager.textSecondary)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+enum AppTab {
+    case favorites, playlists, search, more
+}

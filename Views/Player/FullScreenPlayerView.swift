@@ -1,0 +1,325 @@
+import SwiftUI
+
+struct FullScreenPlayerView: View {
+    @ObservedObject var playerManager: PlayerManager
+    @ObservedObject var favoritesManager: FavoritesManager
+    @ObservedObject var playlistsManager: PlaylistsManager
+    @ObservedObject var recentlyPlayedManager: RecentlyPlayedManager
+    @ObservedObject var themeManager: ThemeManager
+
+    var onDismiss: () -> Void
+
+    @State private var showEQ = false
+    @State private var showAddToPlaylist = false
+    @State private var showQueue = false
+    @State private var dragOffset: CGFloat = 0
+
+    private let dragThreshold: CGFloat = 120
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                themeManager.background
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    HStack {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.5))
+                            .frame(width: 36, height: 5)
+                        Spacer()
+                        if !playerManager.queue.isEmpty {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "list.bullet")
+                                    .font(.title3)
+                                    .foregroundColor(themeManager.textPrimary)
+                                Text("\(playerManager.queue.count)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(themeManager.theme.accentColor)
+                                    .offset(x: 10, y: -2)
+                            }
+                        } else {
+                            Image(systemName: "list.bullet")
+                                .font(.title3)
+                                .foregroundColor(themeManager.textSecondary)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                    .padding(.bottom, 20)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showQueue = true }
+
+                    if let track = playerManager.currentTrack {
+                        artworkSection(track: track, size: geometry.size)
+                        trackInfoSection(track: track)
+                        seekBarSection
+                        transportControls
+                        secondaryControls(track: track)
+                        if playerManager.playbackState == .loading {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                                .tint(themeManager.theme.accentColor)
+                                .padding(.top, 8)
+                        }
+                    } else {
+                        Spacer()
+                        Text("No track playing")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+            }
+            .offset(y: dragOffset)
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        if value.translation.height > 0 {
+                            dragOffset = value.translation.height
+                        }
+                    }
+                    .onEnded { value in
+                        if value.translation.height > dragThreshold {
+                            onDismiss()
+                        }
+                        withAnimation(.spring(response: 0.3)) {
+                            dragOffset = 0
+                        }
+                    }
+            )
+        }
+        .sheet(isPresented: $showEQ) {
+            EqualizerView(playerManager: playerManager, themeManager: themeManager)
+        }
+        .sheet(isPresented: $showAddToPlaylist) {
+            addToPlaylistSheet
+        }
+        .sheet(isPresented: $showQueue) {
+            QueueView(playerManager: playerManager, themeManager: themeManager)
+        }
+    }
+
+    // MARK: - Artwork
+
+    private func artworkSection(track: Track, size: CGSize) -> some View {
+        let maxWidth = min(size.width * 0.8, 340)
+        let maxHeight = min(maxWidth, size.height * 0.35)
+
+        return Group {
+            if let url = track.thumbnailURL {
+                AsyncCachedImage(url: url) {
+                    Rectangle()
+                        .fill(themeManager.dividerColor)
+                }
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.3), radius: 16, y: 4)
+            } else {
+                Rectangle()
+                    .fill(themeManager.dividerColor)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .cornerRadius(12)
+            }
+        }
+        .padding(.bottom, 24)
+    }
+
+    // MARK: - Track Info
+
+    private func trackInfoSection(track: Track) -> some View {
+        VStack(spacing: 4) {
+            Text(track.title)
+                .font(.title2)
+                .fontWeight(.bold)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundColor(themeManager.textPrimary)
+
+            Text(track.artist)
+                .font(.body)
+                .foregroundColor(themeManager.textSecondary)
+        }
+        .padding(.bottom, 16)
+    }
+
+    // MARK: - Seek Bar
+
+    private var seekBarSection: some View {
+        VStack(spacing: 4) {
+            Slider(
+                value: Binding(
+                    get: { playerManager.currentTime },
+                    set: { playerManager.seek(to: $0) }
+                ),
+                in: 0...max(playerManager.duration, 1)
+            ) {
+                Text("Seek")
+            }
+            .tint(themeManager.theme.accentColor)
+
+            HStack {
+                Text(formatTime(playerManager.currentTime))
+                    .font(.caption2)
+                    .foregroundColor(themeManager.textSecondary)
+                Spacer()
+                Text("-\(formatTime(max(0, playerManager.duration - playerManager.currentTime)))")
+                    .font(.caption2)
+                    .foregroundColor(themeManager.textSecondary)
+            }
+        }
+        .padding(.bottom, 20)
+    }
+
+    // MARK: - Transport Controls
+
+    private var transportControls: some View {
+        HStack(spacing: 32) {
+            Button { playerManager.toggleShuffle() } label: {
+                Image(systemName: "shuffle")
+                    .font(.title3)
+                    .foregroundColor(playerManager.isShuffled ? themeManager.theme.accentColor : themeManager.textPrimary)
+            }
+            .accessibilityLabel(playerManager.isShuffled ? "Shuffle on" : "Shuffle off")
+
+            Button { playerManager.previousTrack() } label: {
+                Image(systemName: "backward.fill")
+                    .font(.title)
+                    .foregroundColor(themeManager.textPrimary)
+            }
+            .accessibilityLabel("Previous track")
+
+            Button { playerManager.togglePlayPause() } label: {
+                Image(systemName: playerManager.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 44))
+                    .foregroundColor(themeManager.textPrimary)
+            }
+            .accessibilityLabel(playerManager.isPlaying ? "Pause" : "Play")
+
+            Button { playerManager.nextTrack() } label: {
+                Image(systemName: "forward.fill")
+                    .font(.title)
+                    .foregroundColor(themeManager.textPrimary)
+            }
+            .accessibilityLabel("Next track")
+
+            Button { playerManager.cycleRepeatMode() } label: {
+                Image(systemName: repeatIcon)
+                    .font(.title3)
+                    .foregroundColor(playerManager.repeatMode != .off ? themeManager.theme.accentColor : themeManager.textPrimary)
+            }
+            .accessibilityLabel("Repeat mode: \(playerManager.repeatMode == .off ? "off" : playerManager.repeatMode == .one ? "one" : "all")")
+        }
+        .padding(.bottom, 24)
+    }
+
+    private var repeatIcon: String {
+        switch playerManager.repeatMode {
+        case .off: return "repeat"
+        case .one: return "repeat.1"
+        case .all: return "repeat"
+        }
+    }
+
+    // MARK: - Secondary Controls
+
+    private func secondaryControls(track: Track) -> some View {
+        HStack(spacing: 40) {
+            Button {
+                favoritesManager.toggle(track)
+                if favoritesManager.isFavorite(track) {
+                    recentlyPlayedManager.trackAdded(track)
+                }
+            } label: {
+                Image(systemName: favoritesManager.isFavorite(track) ? "heart.fill" : "heart")
+                    .font(.title3)
+                    .foregroundColor(favoritesManager.isFavorite(track) ? .red : themeManager.textPrimary)
+            }
+
+            Button { showAddToPlaylist = true } label: {
+                Image(systemName: "text.badge.plus")
+                    .font(.title3)
+                    .foregroundColor(themeManager.textPrimary)
+            }
+
+            Button { showEQ = true } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.title3)
+                    .foregroundColor(themeManager.textPrimary)
+            }
+
+            if let url = playerManager.currentTrack?.thumbnailURL {
+                ShareLink(item: url) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title3)
+                        .foregroundColor(themeManager.textPrimary)
+                }
+            }
+        }
+        .padding(.bottom, 32)
+    }
+
+    // MARK: - Add to Playlist Sheet
+
+    private var addToPlaylistSheet: some View {
+        NavigationStack {
+            Group {
+                if playlistsManager.playlists.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("No Playlists")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                        Text("Create a playlist first")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    List(playlistsManager.playlists) { playlist in
+                        Button {
+                            if let track = playerManager.currentTrack {
+                                playlistsManager.addTrack(track, to: playlist)
+                                recentlyPlayedManager.trackAdded(track)
+                                showAddToPlaylist = false
+                            }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(playlist.name)
+                                        .font(.body)
+                                    Text("\(playlist.tracks.count) tracks")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "plus.circle")
+                                    .foregroundColor(themeManager.theme.accentColor)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add to Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showAddToPlaylist = false }
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        let t = Int(max(0, time))
+        let m = t / 60
+        let s = t % 60
+        return String(format: "%d:%02d", m, s)
+    }
+}

@@ -1,0 +1,88 @@
+import Foundation
+import Combine
+
+final class FavoritesManager: ObservableObject {
+    @Published var tracks: [Track] = [] {
+        didSet { recomputeGrouped() }
+    }
+
+    @Published private(set) var grouped: [(letter: String, tracks: [Track])] = []
+
+    private let storageURL: URL
+    private var saveDebouncer: Debouncer!
+
+    deinit { saveDebouncer?.flush() }
+
+    init() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        storageURL = docs.appendingPathComponent("favorites.json")
+        saveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSave() }
+        load()
+        recomputeGrouped()
+    }
+
+    func isFavorite(_ track: Track) -> Bool {
+        tracks.contains(where: { $0.id == track.id })
+    }
+
+    func toggle(_ track: Track) {
+        if let idx = tracks.firstIndex(where: { $0.id == track.id }) {
+            tracks.remove(at: idx)
+        } else {
+            tracks.append(track)
+        }
+        save()
+    }
+
+    func add(_ track: Track) {
+        guard !isFavorite(track) else { return }
+        tracks.append(track)
+        save()
+    }
+
+    func remove(_ track: Track) {
+        tracks.removeAll { $0.id == track.id }
+        save()
+    }
+
+    func removeAll() {
+        tracks.removeAll()
+        save()
+    }
+
+    /// Backwards-compatible accessor. Prefer the published `grouped` property.
+    func groupedByLetter() -> [(letter: String, tracks: [Track])] {
+        grouped
+    }
+
+    private func recomputeGrouped() {
+        let sorted = tracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        let dict = Dictionary(grouping: sorted) { $0.firstLetter }
+        grouped = dict.keys.sorted().map { ($0, dict[$0] ?? []) }
+    }
+
+    private func scheduleSave() {
+        saveDebouncer.call()
+    }
+
+    private func save() {
+        scheduleSave()
+    }
+
+    private func performSave() {
+        guard let data = try? JSONEncoder().encode(tracks) else { return }
+        try? data.write(to: storageURL)
+    }
+
+    /// Force any pending debounced save to flush immediately. Call from
+    /// `applicationWillTerminate` or scenePhase transitions.
+    func flushPendingWrites() {
+        saveDebouncer?.flush()
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: storageURL),
+              let saved = try? JSONDecoder().decode([Track].self, from: data) else { return }
+        tracks = saved
+    }
+}
