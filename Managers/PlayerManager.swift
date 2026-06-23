@@ -55,6 +55,7 @@ final class PlayerManager: NSObject, ObservableObject {
     // MARK: - Subsystems
 
     private var urlSession: URLSessionProtocol!
+    private var streamResolver: StreamResolving!
 
     var nowPlaying: NowPlayingService!
     private var avPlayerPath: AVPlayerPath!
@@ -85,6 +86,7 @@ final class PlayerManager: NSObject, ObservableObject {
     override init() {
         let session = Self.defaultURLSession()
         self.urlSession = session
+        self.streamResolver = StreamResolver(session: session)
         super.init()
         nowPlaying = NowPlayingService(player: self, urlSession: session)
         avPlayerPath = AVPlayerPath(player: self)
@@ -103,6 +105,7 @@ final class PlayerManager: NSObject, ObservableObject {
     /// Designated initialiser for tests and alternative configurations.
     init(urlSession: URLSessionProtocol) {
         self.urlSession = urlSession
+        self.streamResolver = StreamResolver(session: urlSession)
         super.init()
         let session = urlSession
         nowPlaying = NowPlayingService(player: self, urlSession: session)
@@ -368,42 +371,48 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - Network
 
+    /// Kicks off a `/api/play?video_id=...` request and dispatches the
+    /// resulting stream URL to the AVPlayer path or the engine path based
+    /// on the current EQ state. The Task is stored on the manager so a
+    /// new `play(_:)` call can cancel the prior in-flight request; the
+    /// `generation` check is a defensive fallback in case the cancel
+    /// races with the response.
+    private var streamTask: Task<Void, Never>?
+
     private func fetchStreamURL(for videoID: String, generation: Int) {
-        guard let url = URL(string: "\(Self.backendURL)/api/play?video_id=\(videoID)") else { return }
-
-        urlSession.dataTask(with: url) { [weak self] data, _, error in
+        streamTask?.cancel()
+        streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            if let error {
-                log.error("Network error: \(error.localizedDescription, privacy: .public)")
-                DispatchQueue.main.async { self.handleFetchError() }
-                return
-            }
-            guard let data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let streamURLString = json["url"] as? String else {
-                log.error("Failed to parse stream URL JSON")
-                DispatchQueue.main.async { self.handleFetchError() }
-                return
-            }
 
-            let base = Self.backendURL
-            guard let streamURL = URL(string: streamURLString, relativeTo: URL(string: base))?.absoluteURL else {
-                DispatchQueue.main.async { self.handleFetchError() }
+            let streamURL: URL
+            do {
+                streamURL = try await self.streamResolver.stream(for: videoID)
+            } catch is CancellationError {
                 return
-            }
-
-            log.notice("Got stream URL \(streamURL.absoluteString, privacy: .public)")
-            DispatchQueue.main.async {
-                log.notice("fetchStreamURL completion gen=\(generation, privacy: .public) currentGen=\(self.playGeneration, privacy: .public) willDispatchTo=\(self.eq.isEnabled ? "engine" : "playNative", privacy: .public)")
-                guard generation == self.playGeneration else { return }
-                self.currentStreamURL = streamURL
-                if self.eq.isEnabled {
-                    self.downloadAndPlayEngine(url: streamURL)
-                } else {
-                    self.playAVPlayer(url: streamURL)
+            } catch {
+                log.error("Stream URL fetch failed: \(error.localizedDescription, privacy: .public)")
+                if generation == self.playGeneration {
+                    self.handleFetchError()
                 }
+                return
             }
-        }.resume()
+
+            if Task.isCancelled { return }
+
+            // Bail if a newer play() arrived while the network call was
+            // in flight. The Task cancellation handles the common case;
+            // this check covers the brief window where the cancel
+            // hasn't propagated to the resolver yet.
+            guard generation == self.playGeneration else { return }
+
+            log.notice("Got stream URL \(streamURL.absoluteString, privacy: .public) gen=\(generation, privacy: .public) willDispatchTo=\(self.eq.isEnabled ? "engine" : "playNative", privacy: .public)")
+            self.currentStreamURL = streamURL
+            if self.eq.isEnabled {
+                self.downloadAndPlayEngine(url: streamURL)
+            } else {
+                self.playAVPlayer(url: streamURL)
+            }
+        }
     }
 
     private func handleFetchError() {

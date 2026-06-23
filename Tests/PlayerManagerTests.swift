@@ -17,6 +17,10 @@ final class MockURLSession: URLSessionProtocol, @unchecked Sendable {
     /// Test sets this to control the response.
     var dataTaskHandler: ((URL, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void)?
 
+    /// Closure invoked for each `data(from:)` call.
+    /// Test sets this to control the response. Used by `StreamResolver`.
+    var dataFromHandler: ((URL) async throws -> (Data, URLResponse))?
+
     @discardableResult
     func dataTask(
         with url: URL,
@@ -30,7 +34,15 @@ final class MockURLSession: URLSessionProtocol, @unchecked Sendable {
     }
 
     func data(from url: URL) async throws -> (Data, URLResponse) {
-        (Data(), URLResponse(url: url, mimeType: nil, expectedContentLength: 0, textEncodingName: nil))
+        // Record a synthetic request entry so legacy assertions that scan
+        // `recordedRequests` keep working. The completion handler is a
+        // no-op since the async path never invokes it.
+        let captured = url
+        recordedRequests.append(RecordedRequest(url: captured, completionHandler: { _, _, _ in }))
+        if let handler = dataFromHandler {
+            return try await handler(url)
+        }
+        return (Data(), URLResponse(url: url, mimeType: nil, expectedContentLength: 0, textEncodingName: nil))
     }
 }
 
@@ -185,49 +197,37 @@ final class PlayerManagerTests: XCTestCase {
 
     // MARK: - Network (3)
 
-    func test_FetchStreamURLRequestsBackend() {
+    func test_FetchStreamURLRequestsBackend() async {
         let json = #"{"url":"/api/stream/abc.m4a","cached":false}"#
         let data = json.data(using: .utf8)!
         let response = HTTPURLResponse(url: URL(string: "http://x")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-        mockSession.dataTaskHandler = { url, completion in
-            completion(data, response, nil)
+        mockSession.dataFromHandler = { url in
+            (data, response)
         }
         player.play(makeTrack(id: "abc", title: "A"))
-        let exp = expectation(description: "url requested")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            XCTAssertTrue(self.mockSession.recordedRequests.contains(where: {
-                $0.url.absoluteString.contains("video_id=abc")
-            }))
-            exp.fulfill()
-        }
-        wait(for: [exp], timeout: 1.0)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(self.mockSession.recordedRequests.contains(where: {
+            $0.url.absoluteString.contains("video_id=abc")
+        }))
     }
 
-    func test_FetchStreamURLHandlesNetworkError() {
-        mockSession.dataTaskHandler = { _, completion in
-            completion(nil, nil, URLError(.notConnectedToInternet))
+    func test_FetchStreamURLHandlesNetworkError() async {
+        mockSession.dataFromHandler = { _ in
+            throw URLError(.notConnectedToInternet)
         }
         player.play(makeTrack(id: "abc", title: "A"))
-        let exp = expectation(description: "idle after error")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            XCTAssertEqual(self.player.playbackState, .idle)
-            XCTAssertFalse(self.player.isPlaying)
-            exp.fulfill()
-        }
-        wait(for: [exp], timeout: 1.0)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(self.player.playbackState, .idle)
+        XCTAssertFalse(self.player.isPlaying)
     }
 
-    func test_FetchStreamURLHandlesMalformedJSON() {
-        mockSession.dataTaskHandler = { _, completion in
-            completion(Data("not json".utf8), nil, nil)
+    func test_FetchStreamURLHandlesMalformedJSON() async {
+        mockSession.dataFromHandler = { url in
+            (Data("not json".utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
         player.play(makeTrack(id: "abc", title: "A"))
-        let exp = expectation(description: "idle after parse error")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            XCTAssertEqual(self.player.playbackState, .idle)
-            exp.fulfill()
-        }
-        wait(for: [exp], timeout: 1.0)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(self.player.playbackState, .idle)
     }
 
     // MARK: - Engine / cache (3)
@@ -243,30 +243,26 @@ final class PlayerManagerTests: XCTestCase {
         player.clearEQCache()
     }
 
-    func test_PlayWithEQEnabledRecordsRequest() {
+    func test_PlayWithEQEnabledRecordsRequest() async {
         // With EQ on, the engine path requires a download. The first play()
         // should record at least one network request.
         player.applyEQPreset([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-        mockSession.dataTaskHandler = { url, completion in
+        mockSession.dataFromHandler = { url in
             if url.absoluteString.contains("/api/play") {
-                completion(
+                return (
                     Data(#"{"url":"/api/stream/abc.m4a","cached":false}"#.utf8),
-                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    nil
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
                 )
             } else {
-                completion(Data(),
-                            HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                            nil)
+                return (
+                    Data(),
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
             }
         }
         player.play(makeTrack(id: "abc", title: "A"))
-        let exp = expectation(description: "first play records request")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            XCTAssertGreaterThan(self.mockSession.recordedRequests.count, 0)
-            exp.fulfill()
-        }
-        wait(for: [exp], timeout: 1.0)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertGreaterThan(self.mockSession.recordedRequests.count, 0)
     }
 
     // MARK: - Lifecycle (2)
