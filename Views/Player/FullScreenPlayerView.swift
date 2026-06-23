@@ -34,23 +34,26 @@ struct FullScreenPlayerView: View {
                         .padding(.bottom, DS.Spacing.lg)
 
                     if let track = playerManager.currentTrack {
-                        artworkSection(track: track, size: geometry.size)
-                        trackInfoSection(track: track)
-                        seekBarSection
-                        transportControls
-                        secondaryControls(track: track)
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                artworkSection(track: track, size: geometry.size)
+                                trackInfoSection(track: track)
+                                seekBarSection
+                                transportControls
+                                secondaryControls(track: track)
+                            }
+                            .padding(.bottom, DS.Spacing.lg)
+                        }
+                        .scrollIndicators(.hidden)
                     } else {
                         emptyState
                     }
-
-                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, DS.Spacing.xl)
-                .padding(.bottom, DS.Spacing.xl)
             }
             .offset(y: dragOffset)
             .scaleEffect(scaleForDrag)
-            .gesture(
+            .simultaneousGesture(
                 DragGesture()
                     .onChanged { value in
                         if value.translation.height > 0 {
@@ -158,7 +161,7 @@ struct FullScreenPlayerView: View {
 
     private func artworkSection(track: Track, size: CGSize) -> some View {
         let maxWidth = min(size.width * 0.85, 380)
-        let maxHeight = min(maxWidth, size.height * 0.42)
+        let maxHeight = min(maxWidth, size.height * 0.34)
 
         return Group {
             if let url = track.thumbnailURL {
@@ -183,7 +186,7 @@ struct FullScreenPlayerView: View {
         )
         .cardShadow()
         .matchedGeometryEffect(id: "playerArtwork", in: namespace)
-        .padding(.bottom, DS.Spacing.xl)
+        .padding(.bottom, DS.Spacing.lg)
     }
 
     // MARK: - Track Info
@@ -266,7 +269,7 @@ struct FullScreenPlayerView: View {
             }
             .accessibilityLabel("Repeat mode: \(playerManager.repeatMode == .off ? "off" : playerManager.repeatMode == .one ? "one" : "all")")
         }
-        .padding(.bottom, DS.Spacing.xl)
+        .padding(.bottom, DS.Spacing.lg)
     }
 
     private func shuffleIcon() -> String { "shuffle" }

@@ -205,7 +205,7 @@ struct SearchView: View {
             if let errorMessage {
                 errorPill(errorMessage)
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: DS.Spacing.lg, bottom: DS.Spacing.sm, trailing: DS.Spacing.lg))
+                    .listRowInsets(EdgeInsets(top: 0, leading: DS.Spacing.md, bottom: DS.Spacing.sm, trailing: DS.Spacing.md))
             }
 
             if isSearching && results.isEmpty {
@@ -213,7 +213,7 @@ struct SearchView: View {
                     skeletonRow
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.lg, bottom: 4, trailing: DS.Spacing.lg))
+                        .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.md, bottom: 4, trailing: DS.Spacing.md))
                 }
             } else if results.isEmpty && !isSearching {
                 emptyResultsView
@@ -228,13 +228,35 @@ struct SearchView: View {
                         recentlyPlayedManager.trackPlayed(track)
                         selectedTab = .favorites
                     } label: {
-                        TrackRow(track: track, themeManager: themeManager, playerManager: playerManager)
-                            .padding(.horizontal, 4)
+                        HStack(spacing: DS.Spacing.md) {
+                            TrackThumbnail(url: track.thumbnailURL, size: 52, cornerRadius: DS.Radius.sm)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(track.title)
+                                    .font(DS.Typography.bodyEm)
+                                    .lineLimit(1)
+                                    .foregroundColor(isCurrent ? tokens.accent : tokens.textPrimary)
+                                HStack(spacing: 6) {
+                                    if isCurrent {
+                                        NowPlayingIndicator(isPlaying: playerManager.isPlaying, accent: tokens.accent)
+                                    }
+                                    Text(track.artist)
+                                        .font(DS.Typography.caption)
+                                        .lineLimit(1)
+                                        .foregroundColor(tokens.textSecondary)
+                                }
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .addToQueueGesture(playerManager: playerManager, track: track)
                     .listRowBackground(tokens.background)
                     .listRowSeparatorTint(tokens.hairline)
-                    .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.lg, bottom: 4, trailing: DS.Spacing.lg))
+                    .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.md, bottom: 4, trailing: DS.Spacing.md))
                 }
             }
         }
@@ -261,7 +283,7 @@ struct SearchView: View {
     private var skeletonRow: some View {
         HStack(spacing: DS.Spacing.md) {
             ShimmerView(cornerRadius: DS.Radius.sm)
-                .frame(width: 48, height: 48)
+                .frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 6) {
                 ShimmerView(cornerRadius: 4)
                     .frame(height: 12)

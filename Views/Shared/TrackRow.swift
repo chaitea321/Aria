@@ -48,55 +48,6 @@ struct NowPlayingLeadingBar: View {
     }
 }
 
-/// A polished row used in lists (Favorites, Playlists, Search, Queue).
-struct TrackRow: View {
-    let track: Track
-    let themeManager: ThemeManager
-    let playerManager: PlayerManager
-    var showChevron: Bool = false
-    var onTap: () -> Void = {}
-
-    private var tokens: DesignTokens { themeManager.tokens }
-    private var isCurrent: Bool { playerManager.currentTrack?.id == track.id }
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: DS.Spacing.md) {
-                NowPlayingLeadingBar(isCurrent: isCurrent, accent: tokens.accent)
-
-                TrackThumbnail(url: track.thumbnailURL, size: 48, cornerRadius: DS.Radius.sm)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(DS.Typography.bodyEm)
-                        .lineLimit(1)
-                        .foregroundColor(isCurrent ? tokens.accent : tokens.textPrimary)
-                    HStack(spacing: 6) {
-                        if isCurrent {
-                            NowPlayingIndicator(isPlaying: playerManager.isPlaying, accent: tokens.accent)
-                        }
-                        Text(track.artist)
-                            .font(DS.Typography.caption)
-                            .lineLimit(1)
-                            .foregroundColor(tokens.textSecondary)
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                if showChevron {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(tokens.textSecondary)
-                }
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 /// Section header used in lists (Apple-style small caps).
 struct SectionLabel: View {
     let title: String
