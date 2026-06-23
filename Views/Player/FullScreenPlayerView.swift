@@ -7,7 +7,6 @@ struct FullScreenPlayerView: View {
     @ObservedObject var recentlyPlayedManager: RecentlyPlayedManager
     @ObservedObject var themeManager: ThemeManager
 
-    var namespace: Namespace.ID
     var onDismiss: () -> Void
 
     @State private var showEQ = false
@@ -17,56 +16,81 @@ struct FullScreenPlayerView: View {
 
     private let dragThreshold: CGFloat = 120
 
-    private var tokens: DesignTokens { themeManager.tokens }
-
     var body: some View {
         GeometryReader { geometry in
-            let isPortrait = geometry.size.height >= geometry.size.width
-
             ZStack {
-                ArtworkBackdrop(
-                    artworkURL: playerManager.currentTrack?.thumbnailURL,
-                    tokens: tokens
-                )
+                themeManager.background
+                    .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    topBar
-                        .padding(.horizontal, DS.Spacing.xl)
-                        .padding(.top, DS.Spacing.sm)
-                        .padding(.bottom, DS.Spacing.lg)
+                    HStack {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.5))
+                            .frame(width: 36, height: 5)
+                        Spacer()
+                        if !playerManager.queue.isEmpty {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "list.bullet")
+                                    .font(.title3)
+                                    .foregroundColor(themeManager.textPrimary)
+                                Text("\(playerManager.queue.count)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(themeManager.theme.accentColor)
+                                    .offset(x: 10, y: -2)
+                            }
+                        } else {
+                            Image(systemName: "list.bullet")
+                                .font(.title3)
+                                .foregroundColor(themeManager.textSecondary)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                    .padding(.bottom, 20)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showQueue = true }
 
                     if let track = playerManager.currentTrack {
-                        if isPortrait {
-                            portraitLayout(track: track, size: geometry.size)
-                        } else {
-                            landscapeLayout(track: track, size: geometry.size)
+                        artworkSection(track: track, size: geometry.size)
+                        trackInfoSection(track: track)
+                        seekBarSection
+                        transportControls
+                        secondaryControls(track: track)
+                        if playerManager.playbackState == .loading {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                                .tint(themeManager.theme.accentColor)
+                                .padding(.top, 8)
                         }
                     } else {
-                        emptyState
+                        Spacer()
+                        Text("No track playing")
+                            .foregroundColor(.secondary)
+                        Spacer()
                     }
+
+                    Spacer()
                 }
-                .padding(.horizontal, isPortrait ? DS.Spacing.xl : DS.Spacing.lg)
+                .padding(.horizontal, 24)
             }
             .offset(y: dragOffset)
-            .scaleEffect(scaleForDrag)
-            .simultaneousGesture(
+            .gesture(
                 DragGesture()
                     .onChanged { value in
                         if value.translation.height > 0 {
-                            dragOffset = rubberBanded(value.translation.height)
+                            dragOffset = value.translation.height
                         }
                     }
                     .onEnded { value in
                         if value.translation.height > dragThreshold {
                             onDismiss()
                         }
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        withAnimation(.spring(response: 0.3)) {
                             dragOffset = 0
                         }
                     }
             )
         }
-        .background(Color.clear)
         .sheet(isPresented: $showEQ) {
             EqualizerView(playerManager: playerManager, themeManager: themeManager)
         }
@@ -78,157 +102,30 @@ struct FullScreenPlayerView: View {
         }
     }
 
-    // MARK: - Layouts
-
-    private func portraitLayout(track: Track, size: CGSize) -> some View {
-        VStack(spacing: 0) {
-            artworkView(track: track, side: artworkSideForPortrait(size: size))
-                .padding(.bottom, DS.Spacing.lg)
-
-            trackInfoSection(track: track)
-
-            Spacer(minLength: DS.Spacing.sm)
-
-            seekBarSection
-            transportControls
-            secondaryControls(track: track)
-        }
-    }
-
-    private func landscapeLayout(track: Track, size: CGSize) -> some View {
-        HStack(alignment: .center, spacing: DS.Spacing.lg) {
-            artworkView(track: track, side: artworkSideForLandscape(size: size))
-
-            VStack(spacing: 0) {
-                trackInfoSection(track: track)
-                Spacer(minLength: DS.Spacing.sm)
-                seekBarSection
-                transportControls
-                secondaryControls(track: track)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    // MARK: - Artwork sizing
-
-    private func artworkSideForPortrait(size: CGSize) -> CGFloat {
-        // Cap by the screen width (with some padding) and by ~50% of the
-        // available height so the artwork dominates without crowding the
-        // controls at the bottom.
-        let byWidth = min(size.width, 420) - DS.Spacing.xl * 2
-        let byHeight = size.height * 0.46
-        return max(180, min(byWidth, byHeight, 380))
-    }
-
-    private func artworkSideForLandscape(size: CGSize) -> CGFloat {
-        // In landscape, the artwork is a square sized primarily by the
-        // screen height so it never overflows vertically.
-        let byHeight = size.height * 0.78
-        let byWidth = size.width * 0.42
-        return max(160, min(byHeight, byWidth, 360))
-    }
-
-    // MARK: - Drag math
-
-    private var scaleForDrag: CGFloat {
-        let f = min(1, dragOffset / 600)
-        return 1 - f * 0.04
-    }
-
-    private func rubberBanded(_ raw: CGFloat) -> CGFloat {
-        let dim: CGFloat = 600
-        let factor: CGFloat = 0.55
-        if raw < 0 { return raw }
-        if raw < dim {
-            return raw * factor
-        }
-        let extra = raw - dim
-        return dim * factor + extra * 0.25
-    }
-
-    // MARK: - Top Bar
-
-    private var topBar: some View {
-        HStack(alignment: .center) {
-            Button {
-                onDismiss()
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(tokens.textPrimary)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss player")
-
-            Spacer()
-
-            Capsule()
-                .fill(Color.primary.opacity(0.25))
-                .frame(width: 36, height: 5)
-                .padding(.bottom, 18)
-
-            Spacer()
-
-            queueButton
-        }
-    }
-
-    private var queueButton: some View {
-        Button {
-            showQueue = true
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 14, weight: .semibold))
-                if !playerManager.queue.isEmpty {
-                    Text("\(playerManager.queue.count)")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                }
-            }
-            .foregroundColor(tokens.textPrimary)
-            .padding(.horizontal, DS.Spacing.md)
-            .padding(.vertical, 7)
-            .background(
-                Capsule()
-                    .fill(tokens.accentSubtle)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(tokens.hairline, lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Up next queue")
-    }
-
     // MARK: - Artwork
 
-    private func artworkView(track: Track, side: CGFloat) -> some View {
-        Group {
+    private func artworkSection(track: Track, size: CGSize) -> some View {
+        let maxWidth = min(size.width * 0.8, 340)
+        let maxHeight = min(maxWidth, size.height * 0.35)
+
+        return Group {
             if let url = track.thumbnailURL {
-                AsyncCachedImage(url: url, cornerRadius: DS.Radius.lg) {
-                    ShimmerView(cornerRadius: DS.Radius.lg)
+                AsyncCachedImage(url: url) {
+                    Rectangle()
+                        .fill(themeManager.dividerColor)
                 }
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.3), radius: 16, y: 4)
             } else {
-                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                    .fill(tokens.dividerColor)
-                    .overlay(
-                        Image(systemName: "music.note")
-                            .font(.system(size: 60, weight: .light))
-                            .foregroundColor(.secondary)
-                    )
+                Rectangle()
+                    .fill(themeManager.dividerColor)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .cornerRadius(12)
             }
         }
-        .frame(width: side, height: side)
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.7)
-        )
-        .cardShadow()
-        .matchedGeometryEffect(id: "playerArtwork", in: namespace)
+        .padding(.bottom, 24)
     }
 
     // MARK: - Track Info
@@ -236,87 +133,90 @@ struct FullScreenPlayerView: View {
     private func trackInfoSection(track: Track) -> some View {
         VStack(spacing: 4) {
             Text(track.title)
-                .font(DS.Typography.display)
+                .font(.title2)
+                .fontWeight(.bold)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
-                .foregroundColor(tokens.textPrimary)
-                .frame(maxWidth: .infinity)
+                .foregroundColor(themeManager.textPrimary)
 
             Text(track.artist)
-                .font(DS.Typography.body)
-                .foregroundColor(tokens.textSecondary)
-                .lineLimit(1)
+                .font(.body)
+                .foregroundColor(themeManager.textSecondary)
         }
-        .padding(.bottom, DS.Spacing.lg)
+        .padding(.bottom, 16)
     }
 
     // MARK: - Seek Bar
 
     private var seekBarSection: some View {
-        VStack(spacing: 6) {
-            ThinSlider(
+        VStack(spacing: 4) {
+            Slider(
                 value: Binding(
                     get: { playerManager.currentTime },
                     set: { playerManager.seek(to: $0) }
                 ),
-                in: 0...max(playerManager.duration, 1),
-                accent: tokens.accent
-            )
-            .frame(height: 22)
+                in: 0...max(playerManager.duration, 1)
+            ) {
+                Text("Seek")
+            }
+            .tint(themeManager.theme.accentColor)
 
             HStack {
                 Text(formatTime(playerManager.currentTime))
-                    .font(DS.Typography.mono)
-                    .foregroundColor(tokens.textSecondary)
+                    .font(.caption2)
+                    .foregroundColor(themeManager.textSecondary)
                 Spacer()
                 Text("-\(formatTime(max(0, playerManager.duration - playerManager.currentTime)))")
-                    .font(DS.Typography.mono)
-                    .foregroundColor(tokens.textSecondary)
+                    .font(.caption2)
+                    .foregroundColor(themeManager.textSecondary)
             }
         }
-        .padding(.bottom, DS.Spacing.lg)
+        .padding(.bottom, 20)
     }
 
     // MARK: - Transport Controls
 
     private var transportControls: some View {
-        HStack(spacing: 28) {
-            transportButton(systemImage: shuffleIcon(), isActive: playerManager.isShuffled) {
-                Haptics.light()
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    playerManager.toggleShuffle()
-                }
+        HStack(spacing: 32) {
+            Button { playerManager.toggleShuffle() } label: {
+                Image(systemName: "shuffle")
+                    .font(.title3)
+                    .foregroundColor(playerManager.isShuffled ? themeManager.theme.accentColor : themeManager.textPrimary)
             }
             .accessibilityLabel(playerManager.isShuffled ? "Shuffle on" : "Shuffle off")
 
-            transportButton(systemImage: "backward.fill", font: .system(size: 28, weight: .regular)) {
-                Haptics.light()
-                playerManager.previousTrack()
+            Button { playerManager.previousTrack() } label: {
+                Image(systemName: "backward.fill")
+                    .font(.title)
+                    .foregroundColor(themeManager.textPrimary)
             }
             .accessibilityLabel("Previous track")
 
-            playButton
+            Button { playerManager.togglePlayPause() } label: {
+                Image(systemName: playerManager.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 44))
+                    .foregroundColor(themeManager.textPrimary)
+            }
+            .accessibilityLabel(playerManager.isPlaying ? "Pause" : "Play")
 
-            transportButton(systemImage: "forward.fill", font: .system(size: 28, weight: .regular)) {
-                Haptics.light()
-                playerManager.nextTrack()
+            Button { playerManager.nextTrack() } label: {
+                Image(systemName: "forward.fill")
+                    .font(.title)
+                    .foregroundColor(themeManager.textPrimary)
             }
             .accessibilityLabel("Next track")
 
-            transportButton(systemImage: repeatIcon(), isActive: playerManager.repeatMode != .off) {
-                Haptics.light()
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    playerManager.cycleRepeatMode()
-                }
+            Button { playerManager.cycleRepeatMode() } label: {
+                Image(systemName: repeatIcon)
+                    .font(.title3)
+                    .foregroundColor(playerManager.repeatMode != .off ? themeManager.theme.accentColor : themeManager.textPrimary)
             }
             .accessibilityLabel("Repeat mode: \(playerManager.repeatMode == .off ? "off" : playerManager.repeatMode == .one ? "one" : "all")")
         }
-        .padding(.bottom, DS.Spacing.lg)
+        .padding(.bottom, 24)
     }
 
-    private func shuffleIcon() -> String { "shuffle" }
-
-    private func repeatIcon() -> String {
+    private var repeatIcon: String {
         switch playerManager.repeatMode {
         case .off: return "repeat"
         case .one: return "repeat.1"
@@ -324,139 +224,42 @@ struct FullScreenPlayerView: View {
         }
     }
 
-    private var playButton: some View {
-        Button {
-            Haptics.medium()
-            playerManager.togglePlayPause()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(tokens.playButtonBackground)
-                    .frame(width: 76, height: 76)
-
-                if playerManager.playbackState == .loading {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(tokens.textPrimary)
-                        .scaleEffect(1.15)
-                } else {
-                    Image(systemName: playerManager.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 32, weight: .semibold))
-                        .foregroundColor(tokens.textPrimary)
-                        .transition(.opacity)
-                        .id(playerManager.isPlaying)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(playerManager.isPlaying ? "Pause" : "Play")
-    }
-
-    private func transportButton(
-        systemImage: String,
-        font: Font = .system(size: 18, weight: .semibold),
-        isActive: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            ZStack {
-                if isActive {
-                    Circle()
-                        .fill(tokens.accentSubtle)
-                        .frame(width: 40, height: 40)
-                }
-                Image(systemName: systemImage)
-                    .font(font)
-                    .foregroundColor(isActive ? tokens.accent : tokens.textPrimary)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: - Secondary Controls
 
     private func secondaryControls(track: Track) -> some View {
-        HStack(spacing: 32) {
-            secondaryButton(systemImage: favoritesManager.isFavorite(track) ? "heart.fill" : "heart",
-                            tint: favoritesManager.isFavorite(track) ? .red : tokens.textPrimary) {
-                Haptics.medium()
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                    favoritesManager.toggle(track)
-                }
+        HStack(spacing: 40) {
+            Button {
+                favoritesManager.toggle(track)
                 if favoritesManager.isFavorite(track) {
                     recentlyPlayedManager.trackAdded(track)
                 }
+            } label: {
+                Image(systemName: favoritesManager.isFavorite(track) ? "heart.fill" : "heart")
+                    .font(.title3)
+                    .foregroundColor(favoritesManager.isFavorite(track) ? .red : themeManager.textPrimary)
             }
-            .accessibilityLabel(favoritesManager.isFavorite(track) ? "Remove from favorites" : "Add to favorites")
 
-            secondaryButton(systemImage: "text.badge.plus", tint: tokens.textPrimary) {
-                Haptics.light()
-                showAddToPlaylist = true
+            Button { showAddToPlaylist = true } label: {
+                Image(systemName: "text.badge.plus")
+                    .font(.title3)
+                    .foregroundColor(themeManager.textPrimary)
             }
-            .accessibilityLabel("Add to playlist")
 
-            secondaryButton(systemImage: "slider.horizontal.3", tint: tokens.textPrimary) {
-                Haptics.light()
-                showEQ = true
+            Button { showEQ = true } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.title3)
+                    .foregroundColor(themeManager.textPrimary)
             }
-            .accessibilityLabel("Open equalizer")
 
             if let url = playerManager.currentTrack?.thumbnailURL {
                 ShareLink(item: url) {
                     Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(tokens.textPrimary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Circle())
+                        .font(.title3)
+                        .foregroundColor(themeManager.textPrimary)
                 }
-            } else {
-                secondaryButton(systemImage: "square.and.arrow.up", tint: tokens.textPrimary) {}
-                    .opacity(0.3)
-                    .disabled(true)
             }
         }
-    }
-
-    private func secondaryButton(
-        systemImage: String,
-        tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(tint)
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Empty State
-
-    private var emptyState: some View {
-        VStack(spacing: DS.Spacing.lg) {
-            Spacer()
-            ZStack {
-                Circle()
-                    .fill(tokens.surface)
-                    .frame(width: 140, height: 140)
-                Image(systemName: "music.note")
-                    .font(.system(size: 56, weight: .light))
-                    .foregroundColor(tokens.textSecondary)
-            }
-            .softShadow()
-            Text("Nothing Playing")
-                .font(DS.Typography.titleLarge)
-                .foregroundColor(tokens.textPrimary)
-            Text("Search for a track to start listening.")
-                .font(DS.Typography.body)
-                .foregroundColor(tokens.textSecondary)
-                .multilineTextAlignment(.center)
-            Spacer()
-        }
+        .padding(.bottom, 32)
     }
 
     // MARK: - Add to Playlist Sheet
@@ -465,24 +268,17 @@ struct FullScreenPlayerView: View {
         NavigationStack {
             Group {
                 if playlistsManager.playlists.isEmpty {
-                    VStack(spacing: DS.Spacing.lg) {
-                        ZStack {
-                            Circle()
-                                .fill(tokens.accentSubtle)
-                                .frame(width: 90, height: 90)
-                            Image(systemName: "music.note.list")
-                                .font(.system(size: 36))
-                                .foregroundColor(tokens.accent)
-                        }
+                    VStack(spacing: 16) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
                         Text("No Playlists")
-                            .font(DS.Typography.titleLarge)
-                            .foregroundColor(tokens.textPrimary)
-                        Text("Create a playlist first in the Playlists tab")
-                            .font(DS.Typography.body)
-                            .foregroundColor(tokens.textSecondary)
-                            .multilineTextAlignment(.center)
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                        Text("Create a playlist first")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
-                    .padding(DS.Spacing.xl)
                 } else {
                     List(playlistsManager.playlists) { playlist in
                         Button {
@@ -492,55 +288,27 @@ struct FullScreenPlayerView: View {
                                 showAddToPlaylist = false
                             }
                         } label: {
-                            HStack(spacing: DS.Spacing.md) {
-                                Group {
-                                    if let url = playlist.previewThumbnailURL {
-                                        AsyncCachedImage(url: url, cornerRadius: DS.Radius.sm) {
-                                            ShimmerView(cornerRadius: DS.Radius.sm)
-                                        }
-                                    } else {
-                                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                                            .fill(tokens.accentSubtle)
-                                            .overlay(
-                                                Image(systemName: "music.note.list")
-                                                    .font(.system(size: 16))
-                                                    .foregroundColor(tokens.accent)
-                                            )
-                                    }
-                                }
-                                .frame(width: 44, height: 44)
-
-                                VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                VStack(alignment: .leading) {
                                     Text(playlist.name)
-                                        .font(DS.Typography.bodyEm)
-                                        .foregroundColor(tokens.textPrimary)
+                                        .font(.body)
                                     Text("\(playlist.tracks.count) tracks")
-                                        .font(DS.Typography.caption)
-                                        .foregroundColor(tokens.textSecondary)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
-
                                 Spacer()
-
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundColor(tokens.accent)
-                                    .font(.system(size: 22))
+                                Image(systemName: "plus.circle")
+                                    .foregroundColor(themeManager.theme.accentColor)
                             }
-                            .contentShape(Rectangle())
                         }
-                        .listRowBackground(tokens.background)
-                        .listRowSeparatorTint(tokens.hairline)
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
                 }
             }
-            .background(tokens.background)
             .navigationTitle("Add to Playlist")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showAddToPlaylist = false }
-                        .foregroundColor(tokens.accent)
                 }
             }
         }
