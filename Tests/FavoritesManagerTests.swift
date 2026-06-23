@@ -3,19 +3,17 @@ import XCTest
 
 final class FavoritesManagerTests: XCTestCase {
     private var manager: FavoritesManager!
-    private var tempDir: URL!
+    private var store: InMemoryKeyValueStore!
 
     override func setUp() {
         super.setUp()
-        tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FavoritesManagerTests-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        manager = FavoritesManager()
+        store = InMemoryKeyValueStore()
+        manager = FavoritesManager(store: store)
     }
 
     override func tearDown() {
         manager = nil
-        try? FileManager.default.removeItem(at: tempDir)
+        store = nil
         super.tearDown()
     }
 
@@ -74,6 +72,17 @@ final class FavoritesManagerTests: XCTestCase {
         manager.add(makeTrack(id: "2", title: "B"))
         manager.removeAll()
         XCTAssertTrue(manager.tracks.isEmpty)
+    }
+
+    func testPersistsAcrossInstances() {
+        let track = makeTrack(id: "p1", title: "Persisted")
+        manager.add(track)
+        manager.flushPendingWrites()
+
+        // A new manager pointed at the same store should see the saved track.
+        let restored = FavoritesManager(store: store)
+        XCTAssertEqual(restored.tracks.count, 1)
+        XCTAssertEqual(restored.tracks.first?.id, "p1")
     }
 
     // MARK: - Helpers

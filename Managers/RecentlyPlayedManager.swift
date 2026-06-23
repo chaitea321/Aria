@@ -7,17 +7,19 @@ final class RecentlyPlayedManager: ObservableObject {
     @Published var recentlyPlayed: [Track] = []
     @Published var recentlyAdded: [Track] = []
 
-    private let playedURL: URL
-    private let addedURL: URL
+    private let playedStore: KeyValueStore
+    private let addedStore: KeyValueStore
     private var playedDebouncer: Debouncer!
     private var addedDebouncer: Debouncer!
 
-    init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        playedURL = docs.appendingPathComponent("recently_played.json")
-        addedURL = docs.appendingPathComponent("recently_added.json")
-        playedDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSavePlayed() }
-        addedDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSaveAdded() }
+    init(
+        playedStore: KeyValueStore = JSONFileStore(filename: "recently_played.json"),
+        addedStore: KeyValueStore = JSONFileStore(filename: "recently_added.json")
+    ) {
+        self.playedStore = playedStore
+        self.addedStore = addedStore
+        self.playedDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSavePlayed() }
+        self.addedDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSaveAdded() }
         load()
     }
 
@@ -60,20 +62,20 @@ final class RecentlyPlayedManager: ObservableObject {
 
     private func performSavePlayed() {
         guard let data = try? JSONEncoder().encode(recentlyPlayed) else { return }
-        try? data.write(to: playedURL)
+        try? playedStore.save(data)
     }
 
     private func performSaveAdded() {
         guard let data = try? JSONEncoder().encode(recentlyAdded) else { return }
-        try? data.write(to: addedURL)
+        try? addedStore.save(data)
     }
 
     private func load() {
-        if let data = try? Data(contentsOf: playedURL),
+        if let data = playedStore.load(),
            let saved = try? JSONDecoder().decode([Track].self, from: data) {
             recentlyPlayed = saved
         }
-        if let data = try? Data(contentsOf: addedURL),
+        if let data = addedStore.load(),
            let saved = try? JSONDecoder().decode([Track].self, from: data) {
             recentlyAdded = saved
         }

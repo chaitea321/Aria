@@ -17,13 +17,12 @@ final class PlaylistsManager: ObservableObject {
     @Published private(set) var sortedPlaylists: [Playlist] = []
     @Published private(set) var recentlyPlayedPlaylists: [Playlist] = []
 
-    private let storageURL: URL
+    private let store: KeyValueStore
     private var saveDebouncer: Debouncer!
 
-    init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        storageURL = docs.appendingPathComponent("playlists.json")
-        saveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSave() }
+    init(store: KeyValueStore = JSONFileStore(filename: "playlists.json")) {
+        self.store = store
+        self.saveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSave() }
         load()
         recomputeSorted()
     }
@@ -93,7 +92,7 @@ final class PlaylistsManager: ObservableObject {
 
     private func performSave() {
         guard let data = try? JSONEncoder().encode(playlists) else { return }
-        try? data.write(to: storageURL)
+        try? store.save(data)
     }
 
     /// Force any pending debounced save to flush immediately.
@@ -102,7 +101,7 @@ final class PlaylistsManager: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
+        guard let data = store.load(),
               let saved = try? JSONDecoder().decode([Playlist].self, from: data) else { return }
         playlists = saved
     }

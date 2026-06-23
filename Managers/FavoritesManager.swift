@@ -8,15 +8,14 @@ final class FavoritesManager: ObservableObject {
 
     @Published private(set) var grouped: [(letter: String, tracks: [Track])] = []
 
-    private let storageURL: URL
+    private let store: KeyValueStore
     private var saveDebouncer: Debouncer!
 
     deinit { saveDebouncer?.flush() }
 
-    init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        storageURL = docs.appendingPathComponent("favorites.json")
-        saveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSave() }
+    init(store: KeyValueStore = JSONFileStore(filename: "favorites.json")) {
+        self.store = store
+        self.saveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSave() }
         load()
         recomputeGrouped()
     }
@@ -61,17 +60,13 @@ final class FavoritesManager: ObservableObject {
         grouped = dict.keys.sorted().map { ($0, dict[$0] ?? []) }
     }
 
-    private func scheduleSave() {
-        saveDebouncer.call()
-    }
-
     private func save() {
-        scheduleSave()
+        saveDebouncer.call()
     }
 
     private func performSave() {
         guard let data = try? JSONEncoder().encode(tracks) else { return }
-        try? data.write(to: storageURL)
+        try? store.save(data)
     }
 
     /// Force any pending debounced save to flush immediately. Call from
@@ -81,7 +76,7 @@ final class FavoritesManager: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
+        guard let data = store.load(),
               let saved = try? JSONDecoder().decode([Track].self, from: data) else { return }
         tracks = saved
     }
