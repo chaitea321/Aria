@@ -9,6 +9,7 @@ struct SearchView: View {
 
     @State private var query = ""
     @State private var results: Loadable<[Track]> = .idle
+    @FocusState private var isSearchFocused: Bool
 
     private let searchService: YouTubeSearchService
     private var tokens: DesignTokens { themeManager.tokens }
@@ -28,32 +29,62 @@ struct SearchView: View {
             .navigationTitle("Search")
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Songs, artists, videos")
+            .focused($isSearchFocused)
             .task(id: query) {
                 await runSearch(for: query)
             }
+            .onAppear { isSearchFocused = false }
         }
     }
 
     @ViewBuilder
     private var content: some View {
-        switch results {
-        case .idle:
-            browseContent
-        case .loading:
-            if let cached = results.value, !cached.isEmpty {
-                resultsList(cached)
-            } else {
+        if !isSearchFocused && query.isEmpty {
+            idleHint
+        } else {
+            switch results {
+            case .idle:
                 browseContent
-            }
-        case .loaded(let tracks):
-            resultsList(tracks)
-        case .failed(let error):
-            resultsList([])
-                .overlay(alignment: .top) {
-                    errorPill(error.localizedDescription)
-                        .padding(DS.Spacing.lg)
+            case .loading:
+                if let cached = results.value, !cached.isEmpty {
+                    resultsList(cached)
+                } else {
+                    browseContent
                 }
+            case .loaded(let tracks):
+                resultsList(tracks)
+            case .failed(let error):
+                resultsList([])
+                    .overlay(alignment: .top) {
+                        errorPill(error.localizedDescription)
+                            .padding(DS.Spacing.lg)
+                    }
+            }
         }
+    }
+
+    private var idleHint: some View {
+        VStack(spacing: DS.Spacing.md) {
+            Spacer(minLength: 40)
+            ZStack {
+                Circle()
+                    .fill(tokens.surface)
+                    .frame(width: 96, height: 96)
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(tokens.textSecondary)
+            }
+            Text("Search Aria")
+                .font(DS.Typography.titleMedium)
+                .foregroundColor(tokens.textPrimary)
+            Text("Tap the search bar to find songs, artists, and videos")
+                .font(DS.Typography.caption)
+                .foregroundColor(tokens.textSecondary)
+                .multilineTextAlignment(.center)
+            Spacer(minLength: 40)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, DS.Spacing.lg)
     }
 
     // MARK: - Browse
