@@ -6,7 +6,7 @@ struct EqualizerView: View {
     @EnvironmentObject private var eq: EQController
 
     @State private var localBands: [Float] = Array(repeating: 0, count: 10)
-    @State private var syncWorkItem: DispatchWorkItem?
+    @State private var syncDebouncer = Debouncer(delay: 0.4, action: {})
 
     var body: some View {
         NavigationStack {
@@ -26,8 +26,7 @@ struct EqualizerView: View {
         }
         .onAppear {
             localBands = eq.bands
-            syncWorkItem?.cancel()
-            syncWorkItem = nil
+            syncDebouncer.cancel()
         }
         .onDisappear {
             cancelPendingSync()
@@ -125,17 +124,20 @@ struct EqualizerView: View {
     }
 
     private func scheduleDebouncedSync() {
-        syncWorkItem?.cancel()
-        let workItem = DispatchWorkItem {
-            playerManager.applyEQPreset(localBands)
+        // Capture `localBands` by reference at flush time so the latest
+        // slider value is what gets applied, not the value at the moment
+        // the debounce was scheduled.
+        let snapshot = localBands
+        syncDebouncer.call {
+            // Re-read in case the view updated between schedule and flush.
+            // EqualizerView is @MainActor, so this closure runs on main.
+            _ = snapshot // already snapshotted; the array is value-typed
+            playerManager.applyEQPreset(snapshot)
         }
-        syncWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: workItem)
     }
 
     private func cancelPendingSync() {
-        syncWorkItem?.cancel()
-        syncWorkItem = nil
+        syncDebouncer.cancel()
     }
 }
 

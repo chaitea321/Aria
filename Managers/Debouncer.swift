@@ -26,6 +26,16 @@ final class Debouncer {
         queue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
+    /// Variant of `call()` that takes the action inline. Useful when the
+    /// action's inputs change between calls (e.g., a UI debouncer that
+    /// needs to read the current text-field value at flush time).
+    func call(_ inlineAction: @escaping () -> Void) {
+        workItem?.cancel()
+        let item = DispatchWorkItem(block: inlineAction)
+        workItem = item
+        queue.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
     /// Cancels any pending invocation without firing.
     func cancel() {
         workItem?.cancel()
