@@ -16,4 +16,18 @@ struct LocalTrack: Identifiable, Codable, Hashable {
     let importedAt: Date
     let fileSizeBytes: Int64
     let durationSeconds: Double?
+
+    /// Converts this library entry to a `Track` suitable for playback
+    /// and for storage in a `Playlist`. The resulting `Track` has
+    /// `localFileURL` set, which `PlayerManager` uses to dispatch
+    /// to the local playback path.
+    func asPlayerTrack(fileURL: URL) -> Track {
+        Track(
+            id: "local:\(id.uuidString)",
+            title: title,
+            artist: artist ?? "This Device",
+            thumbnailURL: artworkURL,
+            localFileURL: fileURL
+        )
+    }
 }

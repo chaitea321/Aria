@@ -5,10 +5,12 @@ struct LibraryView: View {
     @EnvironmentObject private var libraryManager: LocalLibraryManager
     @EnvironmentObject private var playerManager: PlayerManager
     @EnvironmentObject private var themeManager: ThemeManager
+    @EnvironmentObject private var playlistsManager: PlaylistsManager
 
     @State private var isImporting = false
     @State private var importError: String?
     @State private var importingTrackIDs: Set<UUID> = []
+    @State private var addToPlaylistTrack: LocalTrack?
 
     private var tokens: DesignTokens { themeManager.tokens }
 
@@ -56,6 +58,64 @@ struct LibraryView: View {
         } message: {
             Text(importError ?? "")
         }
+        .sheet(item: $addToPlaylistTrack) { track in
+            addToPlaylistSheet(for: track)
+        }
+    }
+
+    @ViewBuilder
+    private func addToPlaylistSheet(for track: LocalTrack) -> some View {
+        NavigationStack {
+            Group {
+                if playlistsManager.playlists.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("No Playlists")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .foregroundColor(tokens.textPrimary)
+                        Text("Create a playlist from the Playlists tab first")
+                            .font(.subheadline)
+                            .foregroundColor(tokens.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                    }
+                } else {
+                    List {
+                        ForEach(playlistsManager.playlists) { playlist in
+                            Button {
+                                let asTrack = track.asPlayerTrack(fileURL: libraryManager.fileURL(for: track))
+                                playlistsManager.addTrack(asTrack, to: playlist)
+                                addToPlaylistTrack = nil
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(playlist.name)
+                                            .font(.body)
+                                            .foregroundColor(tokens.textPrimary)
+                                        Text("\(playlist.tracks.count) tracks")
+                                            .font(.caption)
+                                            .foregroundColor(tokens.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "plus.circle")
+                                        .foregroundColor(tokens.accent)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add to Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { addToPlaylistTrack = nil }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -90,6 +150,32 @@ struct LibraryView: View {
             ForEach(libraryManager.tracks) { track in
                 trackRow(track)
                     .listRowBackground(tokens.cardSurface)
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button {
+                            addToPlaylistTrack = track
+                        } label: {
+                            Label("Playlist", systemImage: "text.badge.plus")
+                        }
+                        .tint(tokens.accent)
+                    }
+                    .contextMenu {
+                        Button {
+                            playTrack(track)
+                        } label: {
+                            Label("Play", systemImage: "play.fill")
+                        }
+                        Button {
+                            addToPlaylistTrack = track
+                        } label: {
+                            Label("Add to Playlist", systemImage: "text.badge.plus")
+                        }
+                        Divider()
+                        Button(role: .destructive) {
+                            libraryManager.remove(track)
+                        } label: {
+                            Label("Delete from Library", systemImage: "trash")
+                        }
+                    }
             }
             .onDelete(perform: deleteTracks)
         }

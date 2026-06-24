@@ -418,6 +418,80 @@ final class PlayerManagerTests: XCTestCase {
                        "local file playback should not hit the backend")
     }
 
+    func test_play_trackWithLocalFileURL_routesToLocalPath() async {
+        // A Track with localFileURL set must play through the local
+        // path (no backend fetch) even when called via the public
+        // play(track:) entry point.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local_\(UUID().uuidString).mp3")
+        try? Data(repeating: 0, count: 100).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let track = Track(
+            id: "local:\(UUID().uuidString)",
+            title: "From Playlist",
+            artist: "Local",
+            thumbnailURL: nil,
+            localFileURL: url
+        )
+        let before = mockSession.recordedRequests.count
+        player.play(track)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(mockSession.recordedRequests.count, before,
+                       "Track with localFileURL should not trigger any network request")
+        XCTAssertEqual(player.currentTrack?.id, track.id)
+        XCTAssertEqual(player.currentStreamURL, url)
+    }
+
+    func test_play_trackWithoutLocalFileURL_stillGoesToBackend() async {
+        // Sanity: a remote Track with no localFileURL still hits the
+        // backend. Refactor must not have changed the streamed path.
+        let json = #"{"url":"/api/stream/abc.m4a","cached":false}"#
+        let data = json.data(using: .utf8)!
+        let response = HTTPURLResponse(url: URL(string: "http://x")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        mockSession.dataFromHandler = { _ in (data, response) }
+
+        let track = Track(id: "yt-abc", title: "YouTube", artist: "Y", thumbnailURL: nil, localFileURL: nil)
+        player.play(track)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(mockSession.recordedRequests.contains(where: { $0.url.absoluteString.contains("video_id=yt-abc") }))
+    }
+
+    func test_localTrack_asPlayerTrack_setsLocalFileURL() {
+        let url = URL(fileURLWithPath: "/tmp/foo.mp3")
+        let local = LocalTrack(
+            id: UUID(),
+            title: "T",
+            artist: "A",
+            artworkURL: nil,
+            fileName: "foo.mp3",
+            importedAt: Date(),
+            fileSizeBytes: 100,
+            durationSeconds: 30
+        )
+        let track = local.asPlayerTrack(fileURL: url)
+        XCTAssertEqual(track.id, "local:\(local.id.uuidString)")
+        XCTAssertEqual(track.title, "T")
+        XCTAssertEqual(track.artist, "A")
+        XCTAssertEqual(track.localFileURL, url)
+        XCTAssertTrue(track.isLocal)
+    }
+
+    func test_localTrack_asPlayerTrack_usesDefaultArtistWhenMissing() {
+        let url = URL(fileURLWithPath: "/tmp/foo.mp3")
+        let local = LocalTrack(
+            id: UUID(),
+            title: "T",
+            artist: nil,
+            artworkURL: nil,
+            fileName: "foo.mp3",
+            importedAt: Date(),
+            fileSizeBytes: 100,
+            durationSeconds: 30
+        )
+        let track = local.asPlayerTrack(fileURL: url)
+        XCTAssertEqual(track.artist, "This Device")
+    }
+
     // MARK: - Helpers
 
     private func makeTrack(id: String, title: String) -> Track {

@@ -209,6 +209,24 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     func play(_ track: Track) {
+        if let localURL = track.localFileURL {
+            playLocal(track: track, fileURL: localURL)
+        } else {
+            playStreamed(track: track)
+        }
+    }
+
+    /// Convenience: starts playback of a library entry. Equivalent to
+    /// `play(track.asPlayerTrack(fileURL:))` but keeps the call site
+    /// explicit about which file is being played.
+    func play(localTrack: LocalTrack, fileURL: URL) {
+        let track = localTrack.asPlayerTrack(fileURL: fileURL)
+        play(track)
+    }
+
+    // MARK: - Playback paths
+
+    private func playStreamed(track: Track) {
         playGeneration += 1
         let gen = playGeneration
         log.notice("play track=\(track.id, privacy: .public) gen=\(gen) prevPlayerAlive=\(self.avPlayerPath?.avPlayer != nil, privacy: .public) prevUsingEngine=\(self.isUsingEngine, privacy: .public)")
@@ -226,35 +244,25 @@ final class PlayerManager: NSObject, ObservableObject {
         fetchStreamURL(for: track.id, generation: gen)
     }
 
-    /// Plays a file that already lives on the device (imported from the
-    /// Files app via the local library). The track's on-disk `fileURL`
-    /// is passed in so `PlayerManager` doesn't need a reference to the
-    /// `LocalLibraryManager`.
-    ///
-    /// - With EQ on, the file plays through the engine path. Since the
-    ///   file is already local, the download step is skipped and the
-    ///   engine starts immediately.
-    /// - With EQ off, the file plays through the AVPlayer path.
-    func play(localTrack: LocalTrack, fileURL: URL) {
+    /// Plays a local file. Honors the current EQ setting: EQ on routes
+    /// through the engine path (no download needed), EQ off goes
+    /// straight to the AVPlayer path.
+    private func playLocal(track: Track, fileURL: URL) {
         playGeneration += 1
         let gen = playGeneration
-        log.notice("play local track=\(localTrack.id, privacy: .public) gen=\(gen) eq=\(self.eq.isEnabled, privacy: .public) hasArtwork=\(localTrack.artworkURL != nil, privacy: .public)")
+        log.notice("play local track=\(track.id, privacy: .public) gen=\(gen) eq=\(self.eq.isEnabled, privacy: .public) hasArtwork=\(track.thumbnailURL != nil, privacy: .public)")
+        _ = gen  // reserved for future generation-based cancellation
         nowPlaying.activateAudioSession()
 
-        currentTrack = Track(
-            id: "local:\(localTrack.id.uuidString)",
-            title: localTrack.title,
-            artist: localTrack.artist ?? "This Device",
-            thumbnailURL: nil
-        )
-        currentArtworkURL = localTrack.artworkURL
+        currentTrack = track
+        currentArtworkURL = track.thumbnailURL
         isPlaying = true
         playbackState = .loading
         currentTime = 0
         duration = 0
         stopAllPlayback()
         nowPlaying.updateNowPlaying()
-        if let artworkURL = localTrack.artworkURL {
+        if let artworkURL = track.thumbnailURL {
             nowPlaying.loadArtwork(from: artworkURL)
         }
         currentStreamURL = fileURL
@@ -263,7 +271,6 @@ final class PlayerManager: NSObject, ObservableObject {
         } else {
             playAVPlayer(url: fileURL)
         }
-        _ = gen  // reserved for future generation-based cancellation
     }
 
     func togglePlayPause() {
