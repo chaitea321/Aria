@@ -14,12 +14,11 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var playbackState: PlaybackState = .idle
     @Published var currentTime: TimeInterval = 0
     @Published var duration: TimeInterval = 0
-    @Published private(set) var eqBands: [Float] = Array(repeating: 0.0, count: 10)
     @Published var isShuffled = false
     @Published var repeatMode: RepeatMode = .off
     @Published var queue: [Track] = []
 
-    let eq = EQController()
+    let eq: EQController
 
     enum PlaybackState: Int {
         case idle = -1
@@ -87,10 +86,10 @@ final class PlayerManager: NSObject, ObservableObject {
         let session = Self.defaultURLSession()
         self.urlSession = session
         self.streamResolver = StreamResolver(session: session)
+        self.eq = EQController()
         super.init()
         nowPlaying = NowPlayingService(player: self, urlSession: session)
         avPlayerPath = AVPlayerPath(player: self)
-        eq.$bands.assign(to: &$eqBands)
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleInterruption(_:)),
@@ -103,14 +102,14 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     /// Designated initialiser for tests and alternative configurations.
-    init(urlSession: URLSessionProtocol) {
+    init(urlSession: URLSessionProtocol, eq: EQController = EQController()) {
         self.urlSession = urlSession
         self.streamResolver = StreamResolver(session: urlSession)
+        self.eq = eq
         super.init()
         let session = urlSession
         nowPlaying = NowPlayingService(player: self, urlSession: session)
         avPlayerPath = AVPlayerPath(player: self)
-        eq.$bands.assign(to: &$eqBands)
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleInterruption(_:)),

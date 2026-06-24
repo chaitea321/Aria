@@ -6,12 +6,13 @@ private let log = Logger(subsystem: "com.aria.music", category: "AriaApp")
 
 @main
 struct AriaApp: App {
-    @StateObject private var playerManager = PlayerManager()
+    @StateObject private var playerManager: PlayerManager
     @StateObject private var favoritesManager = FavoritesManager()
     @StateObject private var playlistsManager = PlaylistsManager()
     @StateObject private var recentlyPlayedManager = RecentlyPlayedManager()
     @StateObject private var settingsManager = SettingsManager()
     @StateObject private var themeManager: ThemeManager
+    @StateObject private var eqController: EQController
 
     init() {
         do {
@@ -22,8 +23,24 @@ struct AriaApp: App {
             log.error("Failed to set audio session category: \(error.localizedDescription, privacy: .public)")
         }
         let settings = SettingsManager()
+        let eq = EQController()
         _themeManager = StateObject(wrappedValue: ThemeManager(settings: settings))
         _settingsManager = StateObject(wrappedValue: settings)
+        _eqController = StateObject(wrappedValue: eq)
+        _playerManager = StateObject(wrappedValue: PlayerManager(urlSession: Self.makeProductionSession(), eq: eq))
+    }
+
+    private static func makeProductionSession() -> URLSessionProtocol {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 60
+        config.urlCache = URLCache.shared
+        let session = URLSession(
+            configuration: config,
+            delegate: TLSPinningDelegate(),
+            delegateQueue: nil
+        )
+        return URLSessionAdapter(session: session)
     }
 
     var body: some Scene {
@@ -35,6 +52,7 @@ struct AriaApp: App {
                 .environmentObject(recentlyPlayedManager)
                 .environmentObject(settingsManager)
                 .environmentObject(themeManager)
+                .environmentObject(eqController)
         }
     }
 

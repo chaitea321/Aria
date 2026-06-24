@@ -35,6 +35,10 @@ private struct ThemeManagerKey: EnvironmentKey {
     @MainActor static var defaultValue: ThemeManager { ThemeManager(settings: SettingsManager()) }
 }
 
+private struct EQControllerKey: EnvironmentKey {
+    @MainActor static var defaultValue: EQController { EQController() }
+}
+
 extension EnvironmentValues {
     var playerManager: PlayerManager {
         get { self[PlayerManagerKey.self] }
@@ -59,5 +63,9 @@ extension EnvironmentValues {
     var themeManager: ThemeManager {
         get { self[ThemeManagerKey.self] }
         set { self[ThemeManagerKey.self] = newValue }
+    }
+    var eqController: EQController {
+        get { self[EQControllerKey.self] }
+        set { self[EQControllerKey.self] = newValue }
     }
 }

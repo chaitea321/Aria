@@ -3,6 +3,7 @@ import SwiftUI
 struct EqualizerView: View {
     @EnvironmentObject private var playerManager: PlayerManager
     @EnvironmentObject private var themeManager: ThemeManager
+    @EnvironmentObject private var eq: EQController
 
     @State private var localBands: [Float] = Array(repeating: 0, count: 10)
     @State private var syncWorkItem: DispatchWorkItem?
@@ -24,13 +25,13 @@ struct EqualizerView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .onAppear {
-            localBands = playerManager.eqBands
+            localBands = eq.bands
             syncWorkItem?.cancel()
             syncWorkItem = nil
         }
         .onDisappear {
             cancelPendingSync()
-            if localBands != playerManager.eqBands {
+            if localBands != eq.bands {
                 playerManager.applyEQPreset(localBands)
             }
         }
