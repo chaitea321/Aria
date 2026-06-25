@@ -136,4 +136,35 @@ final class LibraryViewModelTests: XCTestCase {
         let titles = vm.filteredAndSortedTracks.map(\.title)
         XCTAssertEqual(titles, ["Short", "Long", "Nil A", "Nil B"])
     }
+
+    // MARK: - Grouping (sections)
+
+    func test_groupByAlbum_sortsSectionsAlphabetically() {
+        let library = makeLibrary(tracks: [
+            makeTrack(title: "A1", album: "Zebra"),
+            makeTrack(title: "B1", album: "Apple"),
+            makeTrack(title: "B2", album: "Apple"),
+        ])
+        let vm = LibraryViewModel(library: library, initialSortOrder: .title)
+        vm.groupBy = .album
+        XCTAssertEqual(vm.sections.map(\.title), ["Apple", "Zebra"],
+                       "section titles sorted alphabetically")
+        XCTAssertEqual(vm.sections[0].tracks.map(\.title), ["B1", "B2"],
+                       "tracks within a section preserve sort order")
+        XCTAssertEqual(vm.sections[1].tracks.map(\.title), ["A1"])
+    }
+
+    func test_groupByAlbum_nilGoesToUnknownSection() {
+        let library = makeLibrary(tracks: [
+            makeTrack(title: "A1", album: "Apple"),
+            makeTrack(title: "B1", album: nil),
+        ])
+        let vm = LibraryViewModel(library: library)
+        vm.groupBy = .album
+        let titles = vm.sections.map(\.title)
+        XCTAssertEqual(titles, ["Apple", "Unknown"],
+                       "nil-album tracks go to an \"Unknown\" section, sorted last")
+        let unknown = vm.sections.first { $0.title == "Unknown" }
+        XCTAssertEqual(unknown?.tracks.map(\.title), ["B1"])
+    }
 }

@@ -79,7 +79,37 @@ final class LibraryViewModel: ObservableObject {
         return sort(filtered, by: sortOrder)
     }
 
-    var sections: [LibrarySection] { [] }
+    var sections: [LibrarySection] {
+        let tracks = filteredAndSortedTracks
+        switch groupBy {
+        case .none:
+            return [LibrarySection(id: "all", title: "", tracks: tracks)]
+        case .album:
+            return Self.sectionsBy(tracks, key: { $0.album })
+        case .artist:
+            return Self.sectionsBy(tracks, key: { $0.artist })
+        }
+    }
+
+    private static func sectionsBy(
+        _ tracks: [LocalTrack],
+        key: (LocalTrack) -> String?
+    ) -> [LibrarySection] {
+        let buckets = Dictionary(grouping: tracks) { key($0) ?? Self.unknownKey }
+        let orderedKeys = buckets.keys.sorted { lhs, rhs in
+            if lhs == rhs { return false }
+            if lhs == Self.unknownKey { return false }
+            if rhs == Self.unknownKey { return true }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        return orderedKeys.map { key in
+            let bucket = buckets[key] ?? []
+            let title = key == Self.unknownKey ? "Unknown" : key
+            return LibrarySection(id: title, title: title, tracks: bucket)
+        }
+    }
+
+    private static let unknownKey = "\u{1F}unknown"
 
     private func sort(_ tracks: [LocalTrack], by order: LibrarySortOrder) -> [LocalTrack] {
         switch order {
