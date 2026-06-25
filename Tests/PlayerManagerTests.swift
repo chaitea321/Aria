@@ -435,11 +435,14 @@ final class PlayerManagerTests: XCTestCase {
         )
         let before = mockSession.recordedRequests.count
         player.play(track)
+        // Assert currentStreamURL synchronously, before the AVPlayer KVO
+        // can dispatch a .failed status (the dummy 100-byte file is not
+        // a real audio track, so KVO clears it on the main run loop).
+        XCTAssertEqual(player.currentStreamURL, url)
         try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(mockSession.recordedRequests.count, before,
                        "Track with localFileURL should not trigger any network request")
         XCTAssertEqual(player.currentTrack?.id, track.id)
-        XCTAssertEqual(player.currentStreamURL, url)
     }
 
     func test_play_trackWithoutLocalFileURL_stillGoesToBackend() async {
@@ -454,6 +457,46 @@ final class PlayerManagerTests: XCTestCase {
         player.play(track)
         try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertTrue(mockSession.recordedRequests.contains(where: { $0.url.absoluteString.contains("video_id=yt-abc") }))
+    }
+
+    func test_enableEQDuringLocalPlayback_doesNotHitBackend() async {
+        // Regression: when a local file is playing with EQ off (AVPlayer
+        // path), enabling the EQ must route to the local engine path
+        // via downloadAndPlayEngine, NOT call fetchStreamURL which would
+        // hit the YouTube backend with an invalid video_id like
+        // "local:<UUID>".
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local_\(UUID().uuidString).mp3")
+        try? Data(repeating: 0, count: 100).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let local = LocalTrack(
+            id: UUID(),
+            title: "T",
+            artist: "A",
+            artworkURL: nil,
+            fileName: url.lastPathComponent,
+            importedAt: Date(),
+            fileSizeBytes: 100,
+            durationSeconds: 30
+        )
+
+        // Start with EQ off so the local file plays via AVPlayer.
+        XCTAssertFalse(player.eq.isEnabled)
+        let beforePlay = mockSession.recordedRequests.count
+        player.play(localTrack: local, fileURL: url)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(mockSession.recordedRequests.count, beforePlay,
+                       "initial local playback with EQ off should not hit the backend")
+
+        // Enable EQ — this is the trigger for switchToEnginePlayback.
+        let beforeEnable = mockSession.recordedRequests.count
+        player.applyEQPreset([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(
+            mockSession.recordedRequests.count, beforeEnable,
+            "enabling EQ on a playing local track must not hit the backend (was \(mockSession.recordedRequests.count - beforeEnable) new requests)"
+        )
     }
 
     func test_localTrack_asPlayerTrack_setsLocalFileURL() {

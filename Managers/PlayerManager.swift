@@ -835,7 +835,11 @@ final class PlayerManager: NSObject, ObservableObject {
         avPlayerPath.stop()
         DispatchQueue.main.async { [weak self] in
             guard let self, gen == self.playGeneration else { return }
-            self.fetchStreamURL(for: track.id, generation: gen)
+            if let localURL = track.localFileURL {
+                self.downloadAndPlayEngine(url: localURL)
+            } else {
+                self.fetchStreamURL(for: track.id, generation: gen)
+            }
         }
     }
 
