@@ -25,6 +25,15 @@ private extension Data {
 /// `NSAllowsArbitraryLoads = true` disables ATS but does NOT bypass TLS
 /// cert validation. Cert validation runs as a separate layer.
 final class TLSPinningDelegate: NSObject, URLSessionDelegate {
+    /// Dev-backend hostname the pin fires for. Resolved from
+    /// `ARIA_HOMELAB_HOST` in Info.plist (default: the RFC 5737
+    /// placeholder, so the gate never matches a real host in the
+    /// public source). Override the Info.plist key to your Tailscale IP
+    /// to enable pinning for the dev backend.
+    private static let devHost: String = {
+        Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
+    }()
+
     /// Raw DER bytes of the pinned cert. `nil` in Release builds (or if the
     /// resource is missing from the bundle) means the delegate passes
     /// everything through to the system trust store.
@@ -94,8 +103,11 @@ final class TLSPinningDelegate: NSObject, URLSessionDelegate {
         }
 
         // 2) Hostname gate. Pin only fires for the dev backend, never for
-        // arbitrary self-signed hosts on the open internet.
-        guard host == "192.0.2.1" else {
+        // arbitrary self-signed hosts on the open internet. The pinned
+        // host is read from `ARIA_HOMELAB_HOST` in Info.plist (default
+        // is the RFC 5737 placeholder in the public source; override it
+        // to your Tailscale IP for the dev backend).
+        guard host == Self.devHost else {
             log.error("DEBUG-DIAG system trust failed and host=\(host, privacy: .public) is not pinned: cancelling")
             completionHandler(.cancelAuthenticationChallenge, nil)
             return

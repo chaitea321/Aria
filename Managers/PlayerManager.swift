@@ -55,12 +55,16 @@ final class PlayerManager: NSObject, ObservableObject {
         if let url = Bundle.main.object(forInfoDictionaryKey: "ARIA_BACKEND_URL") as? String {
             return url
         }
+        let host = Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
         #if DEBUG
         // Homelab over Tailscale — WireGuard already encrypts the tunnel,
         // so plain HTTP is fine for local dev. HTTPS was attempted but
         // requires a system-trusted CA on the device, which is impractical
-        // to install on a real iPhone for a dev-only backend.
-        return "http://192.0.2.1:8000"
+        // to install on a real iPhone for a dev-only backend. The host
+        // resolves from `ARIA_HOMELAB_HOST` in Info.plist; the public
+        // source ships the RFC 5737 TEST-NET-1 placeholder so the IP
+        // doesn't leak. See the README's "Dev homelab setup" section.
+        return "http://\(host):8000"
         #else
         return "https://aria-backend-px9s.onrender.com"
         #endif

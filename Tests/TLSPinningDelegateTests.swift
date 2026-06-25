@@ -155,6 +155,14 @@ final class TLSPinningDelegateTests: XCTestCase {
         guard TLSPinningDelegate.loadBundledCert() != nil else {
             throw XCTSkip("cert.der not bundled in this test run")
         }
+        // Skip if the dev host is the placeholder (the public source has
+        // the RFC 5737 placeholder; this test requires a real reachable
+        // host to exercise the full URLSession → TLS → pin path).
+        let backendHost = Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
+        try XCTSkipIf(
+            backendHost == "192.0.2.1",
+            "Skipped: ARIA_HOMELAB_HOST is the placeholder (192.0.2.1). Set the Info.plist key to your Tailscale IP to run this live integration test."
+        )
 
         let delegate = TLSPinningDelegate()
         let config = URLSessionConfiguration.ephemeral
@@ -169,7 +177,7 @@ final class TLSPinningDelegateTests: XCTestCase {
         // Debug builds use plain HTTP (Tailscale handles encryption).
         // The TLSPinningDelegate still does its job — it just sees an
         // HTTP challenge instead of a TLS one and passes through.
-        let url = URL(string: "http://192.0.2.1:8000/api/play?video_id=OA8aw07dpg0")!
+        let url = URL(string: "http://\(backendHost):8000/api/play?video_id=OA8aw07dpg0")!
         do {
             let (data, response) = try await session.data(from: url)
             let http = response as? HTTPURLResponse

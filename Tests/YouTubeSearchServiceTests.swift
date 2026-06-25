@@ -10,7 +10,12 @@ final class YouTubeSearchServiceTests: XCTestCase {
     /// (run `xcrun simctl keychain <udid> add-root-cert /path/to/rootCA.pem`).
     /// Without it, the self-signed cert is rejected at the system level.
     func test_LiveSearchReachesHomelab() async throws {
-        let service = YouTubeSearchService(backendURL: "http://192.0.2.1:8000")
+        let backendHost = Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
+        try XCTSkipIf(
+            backendHost == "192.0.2.1",
+            "Skipped: ARIA_HOMELAB_HOST is the placeholder (192.0.2.1). Set the Info.plist key to your Tailscale IP to run this live integration test."
+        )
+        let service = YouTubeSearchService(backendURL: "http://\(backendHost):8000")
         do {
             let tracks = try await service.search(query: "est gee")
             XCTAssertFalse(tracks.isEmpty, "Expected search results, got 0")
