@@ -272,4 +272,28 @@ final class LocalLibraryManagerTests: XCTestCase {
         XCTAssertGreaterThan(repaired.fileSizeBytes, 0)
         XCTAssertNotEqual(repaired.fileName, original.fileName, "repair generates a new on-disk file")
     }
+
+    func test_repairMissing_actuallyCopiesFileIntoLibrary() async throws {
+        let source = try makeSourceFile(data: Data(repeating: 0, count: 100), ext: "mp3")
+        _ = try await manager.importFile(at: source)
+        let original = manager.tracks[0]
+
+        let oldLibraryFile = manager.fileURL(for: original)
+        try FileManager.default.removeItem(at: oldLibraryFile)
+        manager.auditMissingFlags()
+        XCTAssertTrue(manager.tracks[0].isMissing)
+
+        let newSourceBytes = Data(repeating: 0xAB, count: 256)
+        let newSource = try makeSourceFile(data: newSourceBytes, ext: "mp3")
+        let repaired = try manager.repairMissing(trackID: original.id, newFileURL: newSource)
+
+        let repairedURL = manager.fileURL(for: repaired)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: repairedURL.path),
+            "repaired file should exist on disk at the new library path"
+        )
+        XCTAssertEqual(repairedURL.deletingLastPathComponent().path, libraryDir.path)
+        let onDisk = try Data(contentsOf: repairedURL)
+        XCTAssertEqual(onDisk, newSourceBytes, "repaired file contents should match the new source")
+    }
 }

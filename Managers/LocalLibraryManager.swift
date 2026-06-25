@@ -112,6 +112,8 @@ final class LocalLibraryManager: ObservableObject {
         let newFileName = "\(newDiskID.uuidString).\(ext)"
         let newFile = libraryDirectory.appendingPathComponent(newFileName)
         try? fileManager.removeItem(at: newFile)
+        let didStart = newFileURL.startAccessingSecurityScopedResource()
+        defer { if didStart { newFileURL.stopAccessingSecurityScopedResource() } }
         try fileManager.copyItem(at: newFileURL, to: newFile)
 
         let repaired = LocalTrack(
