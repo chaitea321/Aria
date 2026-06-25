@@ -24,6 +24,7 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var isShuffled = false
     @Published var repeatMode: RepeatMode = .off
     @Published var queue: [Track] = []
+    @Published var playerError: PlayerError?
 
     let eq: EQController
 
@@ -42,6 +43,10 @@ final class PlayerManager: NSObject, ObservableObject {
 
     enum RepeatMode: Int, CaseIterable {
         case off, one, all
+    }
+
+    enum PlayerError: Error, Equatable {
+        case trackMissing(trackID: String)
     }
 
     // MARK: - Configuration
@@ -248,6 +253,14 @@ final class PlayerManager: NSObject, ObservableObject {
     /// through the engine path (no download needed), EQ off goes
     /// straight to the AVPlayer path.
     private func playLocal(track: Track, fileURL: URL) {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            self.currentTrack = track
+            self.isPlaying = false
+            self.playbackState = .ended
+            self.playerError = .trackMissing(trackID: track.id)
+            self.nowPlaying.updateNowPlaying()
+            return
+        }
         playGeneration += 1
         let gen = playGeneration
         log.notice("play local track=\(track.id, privacy: .public) gen=\(gen) eq=\(self.eq.isEnabled, privacy: .public) hasArtwork=\(track.thumbnailURL != nil, privacy: .public)")
