@@ -18,21 +18,34 @@ final class LocalLibraryManager: ObservableObject {
     private let store: KeyValueStore
     private let libraryDirectory: URL
     private let fileManager: FileManager
+    private let isCloudFileNotDownloaded: (URL) -> Bool
     private var saveDebouncer: Debouncer!
 
     init(
         store: KeyValueStore,
         libraryDirectory: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        isCloudFileNotDownloaded: @escaping (URL) -> Bool = LocalLibraryManager.defaultIsCloudFileNotDownloaded(_:)
     ) {
         self.store = store
         self.libraryDirectory = libraryDirectory
         self.fileManager = fileManager
+        self.isCloudFileNotDownloaded = isCloudFileNotDownloaded
         self.saveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSave() }
         try? fileManager.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
         load()
         auditMissingFlags()
         cleanupOrphans()
+    }
+
+    nonisolated static func defaultIsCloudFileNotDownloaded(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(
+            forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+        ) else {
+            return false
+        }
+        guard values.isUbiquitousItem == true else { return false }
+        return values.ubiquitousItemDownloadingStatus != .current
     }
 
     /// Flush any pending debounced save. Call from scenePhase
@@ -49,6 +62,15 @@ final class LocalLibraryManager: ObservableObject {
         let didStart = sourceURL.startAccessingSecurityScopedResource()
         defer { if didStart { sourceURL.stopAccessingSecurityScopedResource() } }
 
+        if isCloudFileNotDownloaded(sourceURL) {
+            throw ImportError.fileNotDownloaded
+        }
+
+        let size = (try? fileManager.attributesOfItem(atPath: sourceURL.path)[.size] as? Int64) ?? 0
+        if size == 0 {
+            throw ImportError.zeroByteFile
+        }
+
         let format = await AudioFormat.probe(url: sourceURL)
         guard format.isSupported else {
             throw ImportError.unsupportedFormat(format: format)
@@ -63,7 +85,7 @@ final class LocalLibraryManager: ObservableObject {
 
         let title = (await Self.readTitle(at: destURL, fallback: sourceURL.deletingPathExtension().lastPathComponent))
         let artist = await Self.readArtist(at: destURL)
-        let size = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? Int64) ?? Int64(original.count)
+        let storedSize = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? Int64) ?? Int64(original.count)
         let duration = await Self.readDuration(at: destURL)
         let artworkURL = await extractArtwork(from: destURL, trackID: id)
 
@@ -74,7 +96,7 @@ final class LocalLibraryManager: ObservableObject {
             artworkURL: artworkURL,
             fileName: fileName,
             importedAt: Date(),
-            fileSizeBytes: size,
+            fileSizeBytes: storedSize,
             durationSeconds: duration
         )
         tracks.insert(track, at: 0)

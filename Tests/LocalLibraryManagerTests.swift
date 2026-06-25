@@ -91,7 +91,7 @@ final class LocalLibraryManagerTests: XCTestCase {
 
     func test_import_extractsTitleFromFilename() async throws {
         let url = tmpDir.appendingPathComponent("My Cool Track.mp3")
-        try Data().write(to: url)
+        try Data(repeating: 0x00, count: 1024).write(to: url)
         let track = try await manager.importFile(at: url)
         XCTAssertEqual(track.title, "My Cool Track")
     }
@@ -456,5 +456,46 @@ final class LocalLibraryManagerTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: orphanPath.path),
                        "orphan artwork file should be removed by cleanup on init")
+    }
+
+    // MARK: - Import gates (B4)
+
+    func test_import_zeroByteFile_rejected() async throws {
+        let source = try makeSourceFile(data: Data(), ext: "mp3")
+        do {
+            _ = try await manager.importFile(at: source)
+            XCTFail("expected ImportError.zeroByteFile, but import succeeded")
+        } catch let error as ImportError {
+            guard case .zeroByteFile = error else {
+                XCTFail("expected .zeroByteFile, got \(error)")
+                return
+            }
+        } catch {
+            XCTFail("expected ImportError, got \(error)")
+        }
+        XCTAssertTrue(manager.tracks.isEmpty,
+                      "no track should be added when the file is empty")
+    }
+
+    func test_import_cloudFileNotDownloaded_rejected() async throws {
+        let cloudManager = LocalLibraryManager(
+            store: store,
+            libraryDirectory: libraryDir,
+            isCloudFileNotDownloaded: { _ in true }
+        )
+        let source = try makeSourceFile()
+        do {
+            _ = try await cloudManager.importFile(at: source)
+            XCTFail("expected ImportError.fileNotDownloaded, but import succeeded")
+        } catch let error as ImportError {
+            guard case .fileNotDownloaded = error else {
+                XCTFail("expected .fileNotDownloaded, got \(error)")
+                return
+            }
+        } catch {
+            XCTFail("expected ImportError, got \(error)")
+        }
+        XCTAssertTrue(cloudManager.tracks.isEmpty,
+                      "no track should be added when the file is an un-downloaded cloud file")
     }
 }
