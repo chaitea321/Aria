@@ -67,6 +67,23 @@ struct LibraryView: View {
                     .accessibilityLabel("Play all tracks")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Sort by", selection: $vm.sortOrder) {
+                            ForEach(LibrarySortOrder.allCases) { order in
+                                Text(order.displayName).tag(order)
+                            }
+                        }
+                        Picker("Group by", selection: $vm.groupBy) {
+                            ForEach(LibraryGroupBy.allCases) { group in
+                                Text(group.displayName).tag(group)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease")
+                    }
+                    .accessibilityLabel("Sort and group options")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isImporting = true
                     } label: {
