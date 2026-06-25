@@ -327,4 +327,28 @@ final class LocalLibraryManagerTests: XCTestCase {
         XCTAssertEqual(format, .unknown)
         XCTAssertFalse(format.isSupported)
     }
+
+    // MARK: - Format gate (B2 Task 3)
+
+    func test_import_unsupportedFormat_doesNotCopyFile() async throws {
+        let source = try makeSourceFile(data: Data(repeating: 0x42, count: 256), ext: "ogg")
+        let filesBefore = (try? FileManager.default.contentsOfDirectory(at: libraryDir, includingPropertiesForKeys: nil)) ?? []
+
+        do {
+            _ = try await manager.importFile(at: source)
+            XCTFail("expected ImportError.unsupportedFormat, but import succeeded")
+        } catch let error as ImportError {
+            guard case .unsupportedFormat(let format) = error else {
+                XCTFail("expected .unsupportedFormat, got \(error)")
+                return
+            }
+            XCTAssertEqual(format, .ogg)
+        } catch {
+            XCTFail("expected ImportError, got \(error)")
+        }
+
+        let filesAfter = (try? FileManager.default.contentsOfDirectory(at: libraryDir, includingPropertiesForKeys: nil)) ?? []
+        XCTAssertEqual(filesAfter.count, filesBefore.count, "no file should have been copied into the library directory")
+        XCTAssertTrue(manager.tracks.isEmpty, "no track should have been added to the library")
+    }
 }

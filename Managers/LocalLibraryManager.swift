@@ -48,6 +48,11 @@ final class LocalLibraryManager: ObservableObject {
         let didStart = sourceURL.startAccessingSecurityScopedResource()
         defer { if didStart { sourceURL.stopAccessingSecurityScopedResource() } }
 
+        let format = await AudioFormat.probe(url: sourceURL)
+        guard format.isSupported else {
+            throw ImportError.unsupportedFormat(format: format)
+        }
+
         let original = try Data(contentsOf: sourceURL)
         let id = UUID()
         let ext = sourceURL.pathExtension

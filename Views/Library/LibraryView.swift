@@ -297,6 +297,8 @@ struct LibraryView: View {
             do {
                 let track = try await libraryManager.importFile(at: url)
                 importingTrackIDs.insert(track.id)
+            } catch let error as ImportError {
+                importError = "\(url.lastPathComponent) is in \(error.format.displayName) format, which isn't supported. Convert to MP3 or FLAC and try again."
             } catch {
                 importError = "Couldn't import \(url.lastPathComponent): \(error.localizedDescription)"
             }
