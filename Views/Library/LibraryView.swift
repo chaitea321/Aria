@@ -43,6 +43,8 @@ struct LibraryView: View {
 
                 if vm.tracks.isEmpty {
                     emptyState
+                } else if vm.filteredAndSortedTracks.isEmpty {
+                    noSearchResults
                 } else {
                     trackList
                 }
@@ -215,58 +217,41 @@ struct LibraryView: View {
     }
 
     private var trackList: some View {
-        List {
-            ForEach(vm.tracks) { track in
-                LibraryTrackRow(
-                    track: track,
-                    isCurrentTrack: isCurrentTrack(track),
-                    isPlaying: playerManager.isPlaying,
-                    tokens: tokens,
-                    onTap: {
-                        if track.isMissing {
-                            nav.missingRepairTrack = track
-                        } else {
-                            playTrack(track)
-                        }
-                    }
-                )
-                .listRowBackground(tokens.cardSurface)
-                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button {
-                        addToPlaylistTrack = track
-                    } label: {
-                        Label("Playlist", systemImage: "text.badge.plus")
-                    }
-                    .tint(tokens.accent)
-                }
-                .contextMenu {
-                    Button {
-                        if track.isMissing {
-                            nav.missingRepairTrack = track
-                        } else {
-                            playTrack(track)
-                        }
-                    } label: {
-                        Label("Play", systemImage: "play.fill")
-                    }
-                    Button {
-                        addToPlaylistTrack = track
-                    } label: {
-                        Label("Add to Playlist", systemImage: "text.badge.plus")
-                    }
-                    Divider()
-                    Button(role: .destructive) {
-                        libraryManager.remove(track)
-                    } label: {
-                        Label("Delete from Library", systemImage: "trash")
-                    }
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(vm.sections) { section in
+                    LibrarySectionView(
+                        section: section,
+                        showHeader: vm.groupBy != .none,
+                        tokens: tokens,
+                        isCurrentTrack: isCurrentTrack,
+                        isPlaying: playerManager.isPlaying,
+                        onPlay: { playOrRepair($0) },
+                        onAddToPlaylist: { addToPlaylistTrack = $0 },
+                        onDelete: { libraryManager.remove($0) }
+                    )
                 }
             }
-            .onDelete(perform: deleteTracks)
+            .padding(.vertical)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
         .background(tokens.background)
+    }
+
+    @ViewBuilder
+    private var noSearchResults: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48, weight: .light))
+                .foregroundColor(tokens.textSecondary)
+            Text("No matches")
+                .font(.title3)
+                .foregroundColor(tokens.textPrimary)
+            Text("No tracks match \"\(vm.searchText)\".")
+                .font(.callout)
+                .foregroundColor(tokens.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
     }
 
     // MARK: - Actions
@@ -295,10 +280,11 @@ struct LibraryView: View {
         }
     }
 
-    private func deleteTracks(at offsets: IndexSet) {
-        let toRemove = offsets.map { vm.tracks[$0] }
-        for track in toRemove {
-            libraryManager.remove(track)
+    private func playOrRepair(_ track: LocalTrack) {
+        if track.isMissing {
+            nav.missingRepairTrack = track
+        } else {
+            playTrack(track)
         }
     }
 
