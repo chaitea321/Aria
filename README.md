@@ -248,6 +248,90 @@ sample `.mp3` / `.flac` / etc. files in there locally for testing.
 Audio files are gitignored so the repo doesn't bloat and so you
 don't accidentally commit licensed content.
 
+## Building for your device (with your Tailscale homelab)
+
+The GitHub source ships with `ARIA_HOMELAB_HOST = 192.0.2.1` (the
+RFC 5737 placeholder). To run the app on your phone against your
+own Tailscale homelab, set the host in **one** of two ways before
+building. The GitHub source stays clean with the placeholder; the
+real IP only lives in your local copy.
+
+### Option A: Edit the Info.plist directly (simplest)
+
+Open `Aria---Music-Browser-Info.plist` and change:
+
+```xml
+<key>ARIA_HOMELAB_HOST</key>
+<string>192.0.2.1</string>
+```
+
+to:
+
+```xml
+<key>ARIA_HOMELAB_HOST</key>
+<string>100.76.103.1</string>     <!-- your Tailscale IP -->
+```
+
+One-line change. `git status` will show this as a local modification
+that you can keep unstaged (or `git update-index --skip-worktree`
+the file so it never shows up again).
+
+### Option B: Override at build time via User-Defined build setting (no source edit)
+
+In Xcode: Project → Info → Configurations → select Debug (and Release
+if you want) → click `+` to add a User-Defined Setting, name it
+`ARIA_HOMELAB_HOST`, value = your Tailscale IP. Or via the command
+line, add to your scheme's "Run" action's environment variables /
+"Arguments Passed On Launch".
+
+This requires changing the `Info.plist` key to use the
+`$(ARIA_HOMELAB_HOST)` substitution syntax so the build setting
+flows into the compiled Info.plist at build time:
+
+```xml
+<key>ARIA_HOMELAB_HOST</key>
+<string>$(ARIA_HOMELAB_HOST)</string>
+```
+
+And adding a default build setting in `Aria.xcodeproj/project.pbxproj`
+for both Debug and Release configurations so the build doesn't fail
+if you forget to set it:
+
+```
+ARIA_HOMELAB_HOST = 192.0.2.1;
+```
+
+**If you go with Option B, commit that change as a separate, focused
+commit** (e.g. "chore: use \$(ARIA_HOMELAB_HOST) substitution so the
+host is overridable via build setting") so it's clearly opt-in and
+easy to revert.
+
+### What the host does
+
+When `ARIA_HOMELAB_HOST` is set, both:
+- `PlayerManager.backendURL` (DEBUG fallback only) — builds
+  `http://<host>:8000`
+- `TLSPinningDelegate.devHost` — gates the cert pin to `<host>`
+
+read from it. The existing `ARIA_BACKEND_URL` Info.plist key still
+wins if set (useful for pointing at a non-homelab backend without
+rebuilding). Release builds keep the public Render URL by default.
+
+### ATS
+
+`NSAllowsLocalNetworking = true` is already in the Info.plist, so
+any Tailscale IP is allowed without a per-IP `NSExceptionDomains`
+entry. The existing `NSExceptionDomains` key for `192.0.2.1` becomes
+a no-op once you set a real host; you can leave it in or remove it.
+
+### Tailscale on the phone
+
+The phone needs the [Tailscale app](https://tailscale.com/download/)
+installed and logged in to the same tailnet as the homelab, with
+the homelab node advertising the right MagicDNS name (or the phone
+using the homelab's Tailscale IP). Tailscale handles the WireGuard
+tunnel transparently.
+
 ## Project memory
 
 `AGENTS.md` at the workspace root (one level up from this repo) is
