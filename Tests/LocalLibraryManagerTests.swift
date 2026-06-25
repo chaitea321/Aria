@@ -297,6 +297,46 @@ final class LocalLibraryManagerTests: XCTestCase {
         XCTAssertEqual(onDisk, newSourceBytes, "repaired file contents should match the new source")
     }
 
+    /// Regression test for the cleanupOrphans bug: after `repairMissing`,
+    /// the track keeps its original `id` but the on-disk file is written
+    /// under a fresh UUID. A `cleanupOrphans` keyed on `track.id.uuidString`
+    /// would treat the freshly-repaired file as an orphan and delete it.
+    func test_repairMissing_thenReinit_preservesFile() async throws {
+        let source = try makeSourceFile(data: Data(repeating: 0, count: 100), ext: "mp3")
+        _ = try await manager.importFile(at: source)
+        let original = manager.tracks[0]
+
+        let oldLibraryFile = manager.fileURL(for: original)
+        try FileManager.default.removeItem(at: oldLibraryFile)
+        manager.auditMissingFlags()
+        XCTAssertTrue(manager.tracks[0].isMissing)
+
+        let newSource = try makeSourceFile(data: Data(repeating: 0xAB, count: 256), ext: "mp3")
+        let repaired = try manager.repairMissing(trackID: original.id, newFileURL: newSource)
+        let repairedURL = manager.fileURL(for: repaired)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repairedURL.path),
+                      "precondition: repaired file is on disk before reinit")
+
+        manager.flushPendingWrites()
+
+        // Recreate the manager — this triggers cleanupOrphans().
+        manager = LocalLibraryManager(store: store, libraryDirectory: libraryDir)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: repairedURL.path),
+            "repaired file must survive cleanupOrphans() on the next init"
+        )
+        XCTAssertEqual(manager.tracks.count, 1)
+        XCTAssertFalse(
+            manager.tracks[0].isMissing,
+            "repaired track must not be flagged missing after reinit"
+        )
+        XCTAssertEqual(
+            manager.tracks[0].fileName, repaired.fileName,
+            "fileName should match the on-disk file (repaired UUID, not original id)"
+        )
+    }
+
     // MARK: - AudioFormat (B2)
 
     func test_formatDetect_mp3() {

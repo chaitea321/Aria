@@ -180,12 +180,21 @@ final class LocalLibraryManager: ObservableObject {
 
     /// Reconciles the on-disk library directory with the in-memory track list.
     /// Any file under `libraryDirectory/` (or its `artwork/` subdir) whose UUID
-    /// prefix doesn't match a known `track.id` is removed. Used to clean up
-    /// partial imports (kill mid-write) and stale artwork after a track is
-    /// removed. Idempotent.
+    /// prefix doesn't match a known on-disk identifier is removed. Used to
+    /// clean up partial imports (kill mid-write) and stale artwork after a
+    /// track is removed. Idempotent.
+    ///
+    /// The live set is keyed on `track.fileName.prefix(36)` (the actual
+    /// on-disk UUID), not `track.id.uuidString` (the stable identity). The
+    /// two can diverge after `repairMissing`, which keeps the original `id`
+    /// but writes the replacement file under a fresh on-disk UUID.
     func cleanupOrphans() {
-        let liveIDs = Set(tracks.map { $0.id.uuidString })
         let uuidPrefixLength = 36  // canonical UUID string length
+        let liveFileUUIDs = Set(tracks.compactMap { track -> String? in
+            track.fileName.count >= uuidPrefixLength
+                ? String(track.fileName.prefix(uuidPrefixLength))
+                : nil
+        })
 
         let liveArtworkFileNames = Set(tracks.compactMap { track -> String? in
             guard let url = track.artworkURL else { return nil }
@@ -204,7 +213,7 @@ final class LocalLibraryManager: ObservableObject {
                 let uuidPrefix = String(name.prefix(uuidPrefixLength))
                 let isKnownByName = knownNames.contains(name)
                 let isKnownByUUID = uuidPrefix.count == uuidPrefixLength
-                    && liveIDs.contains(uuidPrefix)
+                    && liveFileUUIDs.contains(uuidPrefix)
                 if !isKnownByName && !isKnownByUUID {
                     try? fileManager.removeItem(at: entry)
                 }
