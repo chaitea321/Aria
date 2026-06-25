@@ -386,4 +386,35 @@ final class LocalLibraryManagerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: libraryDir.path),
                       "the original directory must be untouched")
     }
+
+    // MARK: - Orphan cleanup (B4)
+
+    func test_orphanAudioFile_removedOnInit() throws {
+        let orphanName = "orphan-\(UUID().uuidString).mp3"
+        let orphanPath = libraryDir.appendingPathComponent(orphanName)
+        try Data(repeating: 0, count: 100).write(to: orphanPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: orphanPath.path),
+                      "precondition: orphan planted on disk")
+
+        manager = LocalLibraryManager(store: store, libraryDirectory: libraryDir)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanPath.path),
+                       "orphan audio file should be removed by cleanup on init")
+        XCTAssertTrue(manager.tracks.isEmpty)
+    }
+
+    func test_orphanArtworkFile_removedOnInit() throws {
+        let artworkDir = libraryDir.appendingPathComponent("artwork", isDirectory: true)
+        try FileManager.default.createDirectory(at: artworkDir, withIntermediateDirectories: true)
+        let orphanName = "orphan-\(UUID().uuidString).jpg"
+        let orphanPath = artworkDir.appendingPathComponent(orphanName)
+        try Data(repeating: 0, count: 100).write(to: orphanPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: orphanPath.path),
+                      "precondition: orphan artwork planted on disk")
+
+        manager = LocalLibraryManager(store: store, libraryDirectory: libraryDir)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanPath.path),
+                       "orphan artwork file should be removed by cleanup on init")
+    }
 }

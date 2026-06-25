@@ -32,6 +32,7 @@ final class LocalLibraryManager: ObservableObject {
         try? fileManager.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
         load()
         auditMissingFlags()
+        cleanupOrphans()
     }
 
     /// Flush any pending debounced save. Call from scenePhase
@@ -175,6 +176,44 @@ final class LocalLibraryManager: ObservableObject {
             tracks = updated
             save()
         }
+    }
+
+    /// Reconciles the on-disk library directory with the in-memory track list.
+    /// Any file under `libraryDirectory/` (or its `artwork/` subdir) whose UUID
+    /// prefix doesn't match a known `track.id` is removed. Used to clean up
+    /// partial imports (kill mid-write) and stale artwork after a track is
+    /// removed. Idempotent.
+    func cleanupOrphans() {
+        let liveIDs = Set(tracks.map { $0.id.uuidString })
+        let uuidPrefixLength = 36  // canonical UUID string length
+
+        let liveArtworkFileNames = Set(tracks.compactMap { track -> String? in
+            guard let url = track.artworkURL else { return nil }
+            return url.lastPathComponent
+        })
+
+        func removeOrphans(in directory: URL, knownNames: Set<String>) {
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { return }
+            for entry in entries {
+                guard !entry.hasDirectoryPath else { continue }
+                let name = entry.lastPathComponent
+                let uuidPrefix = String(name.prefix(uuidPrefixLength))
+                let isKnownByName = knownNames.contains(name)
+                let isKnownByUUID = uuidPrefix.count == uuidPrefixLength
+                    && liveIDs.contains(uuidPrefix)
+                if !isKnownByName && !isKnownByUUID {
+                    try? fileManager.removeItem(at: entry)
+                }
+            }
+        }
+
+        removeOrphans(in: libraryDirectory, knownNames: [])
+        let artworkDir = libraryDirectory.appendingPathComponent("artwork", isDirectory: true)
+        removeOrphans(in: artworkDir, knownNames: liveArtworkFileNames)
     }
 
     // MARK: - Metadata extraction
