@@ -303,13 +303,41 @@ struct LibraryView: View {
         // unfiltered index would silently skip to the wrong track when
         // missing entries precede the tapped one.
         let library = vm.tracks
+        guard let result = Self.playableStartIndex(
+            in: library,
+            tappedTrack: track,
+            fileURL: { libraryManager.fileURL(for: $0) }
+        ) else { return }
+        playerManager.playSlice(result.playable, startIndex: result.startIndex)
+    }
+
+    /// Pre-filters missing tracks from `library` and locates `tappedTrack`'s
+    /// index in the resulting playable array. Returns `nil` if the tapped
+    /// track is missing from the library.
+    ///
+    /// Exposed as a static, parameterised helper so unit tests can drive
+    /// the same pre-filter + re-locate path that `playTrack` uses without
+    /// having to instantiate a full `LibraryView` (which carries a dozen
+    /// `@StateObject` / `@EnvironmentObject` dependencies).
+    ///
+    /// The pre-filter is load-bearing: `PlayerManager.playSlice` clamps its
+    /// `startIndex` to the playable array's bounds, so passing the
+    /// *unfiltered* index alongside the *unfiltered* library causes
+    /// `playSlice`'s internal filter + clamp to land on the wrong track
+    /// whenever a missing entry precedes the tapped one. See
+    /// `test_playSlice_skippedMissingTracks_preservesStartIndex`.
+    static func playableStartIndex(
+        in library: [LocalTrack],
+        tappedTrack: LocalTrack,
+        fileURL: (LocalTrack) -> URL
+    ) -> (playable: [Track], startIndex: Int)? {
         let playable = library
             .filter { !$0.isMissing }
-            .map { $0.asPlayerTrack(fileURL: libraryManager.fileURL(for: $0)) }
-        guard let idx = playable.firstIndex(where: { $0.id == "local:\(track.id.uuidString)" }) else {
-            return
+            .map { $0.asPlayerTrack(fileURL: fileURL($0)) }
+        guard let idx = playable.firstIndex(where: { $0.id == "local:\(tappedTrack.id.uuidString)" }) else {
+            return nil
         }
-        playerManager.playSlice(playable, startIndex: idx)
+        return (playable, idx)
     }
 
     private func playAll() {
