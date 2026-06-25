@@ -24,6 +24,7 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var isShuffled = false
     @Published var repeatMode: RepeatMode = .off
     @Published var queue: [Track] = []
+    @Published var playerError: PlayerError?
 
     let eq: EQController
 
@@ -42,6 +43,10 @@ final class PlayerManager: NSObject, ObservableObject {
 
     enum RepeatMode: Int, CaseIterable {
         case off, one, all
+    }
+
+    enum PlayerError: Error, Equatable {
+        case trackMissing(trackID: String)
     }
 
     // MARK: - Configuration
@@ -248,6 +253,14 @@ final class PlayerManager: NSObject, ObservableObject {
     /// through the engine path (no download needed), EQ off goes
     /// straight to the AVPlayer path.
     private func playLocal(track: Track, fileURL: URL) {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            self.currentTrack = track
+            self.isPlaying = false
+            self.playbackState = .ended
+            self.playerError = .trackMissing(trackID: track.id)
+            self.nowPlaying.updateNowPlaying()
+            return
+        }
         playGeneration += 1
         let gen = playGeneration
         log.notice("play local track=\(track.id, privacy: .public) gen=\(gen) eq=\(self.eq.isEnabled, privacy: .public) hasArtwork=\(track.thumbnailURL != nil, privacy: .public)")
@@ -387,12 +400,25 @@ final class PlayerManager: NSObject, ObservableObject {
     /// `tracks[startIndex]`. Used by callers that want to play a
     /// contiguous slice of a library/playlist (e.g. the Library tab
     /// when the user taps a track in the middle of the list).
+    ///
+    /// Local tracks flagged `isMissing` (file is no longer on disk)
+    /// are filtered out before queuing so a single missing entry
+    /// doesn't trigger a 1-by-1 playback error.
     func playSlice(_ tracks: [Track], startIndex: Int) {
         guard !tracks.isEmpty else { return }
-        let idx = max(0, min(startIndex, tracks.count - 1))
-        let upcoming = Array(tracks.dropFirst(idx + 1))
+        let missing = tracks.filter { $0.isLocal && $0.isMissing }
+        let playable = tracks.filter { track in
+            guard track.isLocal else { return true }
+            return !track.isMissing
+        }
+        if !missing.isEmpty {
+            log.notice("playSlice skipped \(missing.count) missing track(s)")
+        }
+        guard !playable.isEmpty else { return }
+        let idx = max(0, min(startIndex, playable.count - 1))
+        let upcoming = Array(playable.dropFirst(idx + 1))
         queue = upcoming
-        play(tracks[idx])
+        play(playable[idx])
     }
 
     /// TODO: Currently a no-op distinction — both branches restart the current

@@ -6,27 +6,58 @@ struct LibraryView: View {
     @EnvironmentObject private var playerManager: PlayerManager
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var playlistsManager: PlaylistsManager
+    @EnvironmentObject private var nav: NavigationCoordinator
 
     @State private var isImporting = false
     @State private var importError: String?
     @State private var importingTrackIDs: Set<UUID> = []
     @State private var addToPlaylistTrack: LocalTrack?
 
+    @AppStorage("librarySortOrder") private var sortOrderRaw: String = LibrarySortOrder.recentlyAdded.rawValue
+    @AppStorage("libraryGroupBy") private var groupByRaw: String = LibraryGroupBy.none.rawValue
+
+    @StateObject private var vm: LibraryViewModel
+
     private var tokens: DesignTokens { themeManager.tokens }
+
+    init(library: LocalLibraryManager) {
+        let savedSort = UserDefaults.standard.string(forKey: "librarySortOrder")
+            ?? LibrarySortOrder.recentlyAdded.rawValue
+        let savedGroup = UserDefaults.standard.string(forKey: "libraryGroupBy")
+            ?? LibraryGroupBy.none.rawValue
+        let initialSort = LibrarySortOrder(rawValue: savedSort) ?? .recentlyAdded
+        let initialGroup = LibraryGroupBy(rawValue: savedGroup) ?? .none
+        _vm = StateObject(
+            wrappedValue: LibraryViewModel(
+                library: library,
+                initialSortOrder: initialSort,
+                initialGroupBy: initialGroup
+            )
+        )
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 tokens.background.ignoresSafeArea()
 
-                if libraryManager.tracks.isEmpty {
+                if vm.tracks.isEmpty {
                     emptyState
+                } else if vm.filteredAndSortedTracks.isEmpty {
+                    noSearchResults
                 } else {
                     trackList
                 }
             }
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $vm.searchText, prompt: "Search library")
+            .onChange(of: vm.sortOrder) { newValue in
+                sortOrderRaw = newValue.rawValue
+            }
+            .onChange(of: vm.groupBy) { newValue in
+                groupByRaw = newValue.rawValue
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -34,8 +65,25 @@ struct LibraryView: View {
                     } label: {
                         Image(systemName: "play.fill")
                     }
-                    .disabled(libraryManager.tracks.isEmpty)
+                    .disabled(vm.tracks.isEmpty)
                     .accessibilityLabel("Play all tracks")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Sort by", selection: $vm.sortOrder) {
+                            ForEach(LibrarySortOrder.allCases) { order in
+                                Text(order.displayName).tag(order)
+                            }
+                        }
+                        Picker("Group by", selection: $vm.groupBy) {
+                            ForEach(LibraryGroupBy.allCases) { group in
+                                Text(group.displayName).tag(group)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease")
+                    }
+                    .accessibilityLabel("Sort and group options")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -69,6 +117,25 @@ struct LibraryView: View {
         }
         .sheet(item: $addToPlaylistTrack) { track in
             addToPlaylistSheet(for: track)
+        }
+        .sheet(item: $nav.missingRepairTrack) { track in
+            MissingTrackRepairSheet(
+                track: track,
+                onReimport: { url in
+                    do {
+                        _ = try libraryManager.repairMissing(trackID: track.id, newFileURL: url)
+                    } catch {
+                        importError = "Couldn't repair '\(track.fileName)': \(error.localizedDescription)"
+                    }
+                },
+                onRemove: {
+                    libraryManager.remove(track)
+                },
+                onDismiss: { nav.missingRepairTrack = nil }
+            )
+        }
+        .onAppear {
+            libraryManager.auditMissingFlags()
         }
     }
 
@@ -155,106 +222,40 @@ struct LibraryView: View {
     }
 
     private var trackList: some View {
-        List {
-            ForEach(libraryManager.tracks) { track in
-                trackRow(track)
-                    .listRowBackground(tokens.cardSurface)
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        Button {
-                            addToPlaylistTrack = track
-                        } label: {
-                            Label("Playlist", systemImage: "text.badge.plus")
-                        }
-                        .tint(tokens.accent)
-                    }
-                    .contextMenu {
-                        Button {
-                            playTrack(track)
-                        } label: {
-                            Label("Play", systemImage: "play.fill")
-                        }
-                        Button {
-                            addToPlaylistTrack = track
-                        } label: {
-                            Label("Add to Playlist", systemImage: "text.badge.plus")
-                        }
-                        Divider()
-                        Button(role: .destructive) {
-                            libraryManager.remove(track)
-                        } label: {
-                            Label("Delete from Library", systemImage: "trash")
-                        }
-                    }
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(vm.sections) { section in
+                    LibrarySectionView(
+                        section: section,
+                        showHeader: vm.groupBy != .none,
+                        tokens: tokens,
+                        isCurrentTrack: isCurrentTrack,
+                        isPlaying: playerManager.isPlaying,
+                        onPlay: { playOrRepair($0) },
+                        onAddToPlaylist: { addToPlaylistTrack = $0 },
+                        onDelete: { libraryManager.remove($0) }
+                    )
+                }
             }
-            .onDelete(perform: deleteTracks)
+            .padding(.vertical)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
         .background(tokens.background)
     }
 
-    private func trackRow(_ track: LocalTrack) -> some View {
-        Button {
-            playTrack(track)
-        } label: {
-            HStack(spacing: 12) {
-                artworkView(for: track)
-                    .frame(width: 48, height: 48)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.body)
-                        .foregroundColor(tokens.textPrimary)
-                        .lineLimit(1)
-                    if let artist = track.artist {
-                        Text(artist)
-                            .font(.caption)
-                            .foregroundColor(tokens.textSecondary)
-                            .lineLimit(1)
-                    }
-                    HStack(spacing: 8) {
-                        Text(formatBytes(track.fileSizeBytes))
-                        if let duration = track.durationSeconds, duration > 0 {
-                            Text("·")
-                            Text(formatDuration(duration))
-                        }
-                    }
-                    .font(.caption2)
-                    .foregroundColor(tokens.textSecondary)
-                }
-
-                Spacer()
-
-                if isCurrentTrack(track) {
-                    Image(systemName: playerManager.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
-                        .foregroundColor(tokens.accent)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
     @ViewBuilder
-    private func artworkView(for track: LocalTrack) -> some View {
-        if let url = track.artworkURL {
-            // AsyncCachedImage handles in-memory caching so list
-            // scrolling doesn't re-decode the JPEG every redraw.
-            AsyncCachedImage(url: url) {
-                placeholderArtwork
-            }
-        } else {
-            placeholderArtwork
-        }
-    }
-
-    private var placeholderArtwork: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(tokens.dividerColor)
-            Image(systemName: "music.note")
-                .font(.title3)
+    private var noSearchResults: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48, weight: .light))
                 .foregroundColor(tokens.textSecondary)
+            Text("No matches")
+                .font(.title3)
+                .foregroundColor(tokens.textPrimary)
+            Text("No tracks match \"\(vm.searchText)\".")
+                .font(.callout)
+                .foregroundColor(tokens.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
         }
     }
 
@@ -265,16 +266,30 @@ struct LibraryView: View {
             do {
                 let track = try await libraryManager.importFile(at: url)
                 importingTrackIDs.insert(track.id)
+            } catch let error as ImportError {
+                importError = importErrorMessage(for: error, fileName: url.lastPathComponent)
             } catch {
                 importError = "Couldn't import \(url.lastPathComponent): \(error.localizedDescription)"
             }
         }
     }
 
-    private func deleteTracks(at offsets: IndexSet) {
-        let toRemove = offsets.map { libraryManager.tracks[$0] }
-        for track in toRemove {
-            libraryManager.remove(track)
+    private func importErrorMessage(for error: ImportError, fileName: String) -> String {
+        switch error {
+        case .unsupportedFormat(let format):
+            return "\(fileName) is in \(format.displayName) format, which isn't supported. Convert to MP3 or FLAC and try again."
+        case .fileNotDownloaded:
+            return "\(fileName) hasn't finished downloading from iCloud. Open it in the Files app, wait for the download to finish, then try again."
+        case .zeroByteFile:
+            return "\(fileName) is empty (0 bytes). Pick a different file."
+        }
+    }
+
+    private func playOrRepair(_ track: LocalTrack) {
+        if track.isMissing {
+            nav.missingRepairTrack = track
+        } else {
+            playTrack(track)
         }
     }
 
@@ -282,15 +297,52 @@ struct LibraryView: View {
         // Build the full library as Track objects, then start playback
         // at the tapped track. Subsequent Next/Previous cycles through
         // the library in the same order the user sees in the list.
-        let library = libraryManager.tracks
-        let asTracks = library.map { $0.asPlayerTrack(fileURL: libraryManager.fileURL(for: $0)) }
-        let idx = library.firstIndex(where: { $0.id == track.id }) ?? 0
-        playerManager.playSlice(asTracks, startIndex: idx)
+        // Pre-filter missing tracks and re-locate the tapped track's
+        // index in the filtered list — `playSlice` clamps its
+        // `startIndex` to the playable array's bounds, so passing the
+        // unfiltered index would silently skip to the wrong track when
+        // missing entries precede the tapped one.
+        let library = vm.tracks
+        guard let result = Self.playableStartIndex(
+            in: library,
+            tappedTrack: track,
+            fileURL: { libraryManager.fileURL(for: $0) }
+        ) else { return }
+        playerManager.playSlice(result.playable, startIndex: result.startIndex)
+    }
+
+    /// Pre-filters missing tracks from `library` and locates `tappedTrack`'s
+    /// index in the resulting playable array. Returns `nil` if the tapped
+    /// track is missing from the library.
+    ///
+    /// Exposed as a static, parameterised helper so unit tests can drive
+    /// the same pre-filter + re-locate path that `playTrack` uses without
+    /// having to instantiate a full `LibraryView` (which carries a dozen
+    /// `@StateObject` / `@EnvironmentObject` dependencies).
+    ///
+    /// The pre-filter is load-bearing: `PlayerManager.playSlice` clamps its
+    /// `startIndex` to the playable array's bounds, so passing the
+    /// *unfiltered* index alongside the *unfiltered* library causes
+    /// `playSlice`'s internal filter + clamp to land on the wrong track
+    /// whenever a missing entry precedes the tapped one. See
+    /// `test_playSlice_skippedMissingTracks_preservesStartIndex`.
+    static func playableStartIndex(
+        in library: [LocalTrack],
+        tappedTrack: LocalTrack,
+        fileURL: (LocalTrack) -> URL
+    ) -> (playable: [Track], startIndex: Int)? {
+        let playable = library
+            .filter { !$0.isMissing }
+            .map { $0.asPlayerTrack(fileURL: fileURL($0)) }
+        guard let idx = playable.firstIndex(where: { $0.id == "local:\(tappedTrack.id.uuidString)" }) else {
+            return nil
+        }
+        return (playable, idx)
     }
 
     private func playAll() {
-        guard !libraryManager.tracks.isEmpty else { return }
-        let asTracks = libraryManager.tracks.map {
+        guard !vm.tracks.isEmpty else { return }
+        let asTracks = vm.tracks.map {
             $0.asPlayerTrack(fileURL: libraryManager.fileURL(for: $0))
         }
         playerManager.playSlice(asTracks, startIndex: 0)
@@ -298,18 +350,5 @@ struct LibraryView: View {
 
     private func isCurrentTrack(_ track: LocalTrack) -> Bool {
         playerManager.currentTrack?.id == "local:\(track.id.uuidString)"
-    }
-
-    // MARK: - Formatting
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-
-    private func formatDuration(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded())
-        let mins = total / 60
-        let secs = total % 60
-        return String(format: "%d:%02d", mins, secs)
     }
 }

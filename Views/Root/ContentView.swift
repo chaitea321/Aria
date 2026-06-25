@@ -62,6 +62,8 @@ struct ContentView: View {
                 playlistsManager.flushPendingWrites()
                 recentlyPlayedManager.flushPendingWrites()
                 localLibraryManager.flushPendingWrites()
+            } else if newPhase == .active {
+                localLibraryManager.cleanupOrphans()
             }
         }
         .onAppear {
@@ -83,7 +85,7 @@ struct ContentView: View {
         case .playlists:
             PlaylistsView()
         case .library:
-            LibraryView()
+            LibraryView(library: localLibraryManager)
         case .search:
             SearchView(selectedTab: $selectedTab)
         case .more:
