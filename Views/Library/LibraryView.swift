@@ -122,11 +122,16 @@ struct LibraryView: View {
             MissingTrackRepairSheet(
                 track: track,
                 onReimport: { url in
-                    _ = try? libraryManager.repairMissing(trackID: track.id, newFileURL: url)
+                    do {
+                        _ = try libraryManager.repairMissing(trackID: track.id, newFileURL: url)
+                    } catch {
+                        importError = "Couldn't repair '\(track.fileName)': \(error.localizedDescription)"
+                    }
                 },
                 onRemove: {
                     libraryManager.remove(track)
-                }
+                },
+                onDismiss: { nav.missingRepairTrack = nil }
             )
         }
         .onAppear {
@@ -292,10 +297,19 @@ struct LibraryView: View {
         // Build the full library as Track objects, then start playback
         // at the tapped track. Subsequent Next/Previous cycles through
         // the library in the same order the user sees in the list.
+        // Pre-filter missing tracks and re-locate the tapped track's
+        // index in the filtered list — `playSlice` clamps its
+        // `startIndex` to the playable array's bounds, so passing the
+        // unfiltered index would silently skip to the wrong track when
+        // missing entries precede the tapped one.
         let library = vm.tracks
-        let asTracks = library.map { $0.asPlayerTrack(fileURL: libraryManager.fileURL(for: $0)) }
-        let idx = library.firstIndex(where: { $0.id == track.id }) ?? 0
-        playerManager.playSlice(asTracks, startIndex: idx)
+        let playable = library
+            .filter { !$0.isMissing }
+            .map { $0.asPlayerTrack(fileURL: libraryManager.fileURL(for: $0)) }
+        guard let idx = playable.firstIndex(where: { $0.id == "local:\(track.id.uuidString)" }) else {
+            return
+        }
+        playerManager.playSlice(playable, startIndex: idx)
     }
 
     private func playAll() {

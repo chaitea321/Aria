@@ -5,6 +5,12 @@ struct MissingTrackRepairSheet: View {
     let track: LocalTrack
     let onReimport: (URL) -> Void
     let onRemove: () -> Void
+    /// Invoked alongside the SwiftUI `dismiss()` action at every exit
+    /// point. The `dismiss` environment value only tears down the
+    /// sheet — it does not clear the `@Published` binding that
+    /// presented it, so without this callback the sheet can't be
+    /// re-opened for the same track after a Cancel/Remove/Re-import.
+    let onDismiss: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var themeManager: ThemeManager
@@ -41,6 +47,7 @@ struct MissingTrackRepairSheet: View {
 
                 Button(role: .destructive) {
                     onRemove()
+                    onDismiss()
                     dismiss()
                 } label: {
                     Text("Remove from Library")
@@ -56,7 +63,10 @@ struct MissingTrackRepairSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        onDismiss()
+                        dismiss()
+                    }
                 }
             }
             .fileImporter(
@@ -66,6 +76,7 @@ struct MissingTrackRepairSheet: View {
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
                     onReimport(url)
+                    onDismiss()
                     dismiss()
                 }
             }
