@@ -296,4 +296,27 @@ final class LocalLibraryManagerTests: XCTestCase {
         let onDisk = try Data(contentsOf: repairedURL)
         XCTAssertEqual(onDisk, newSourceBytes, "repaired file contents should match the new source")
     }
+
+    // MARK: - AudioFormat (B2)
+
+    func test_formatDetect_mp3() {
+        let format = AudioFormat.detect(extension: "mp3")
+        XCTAssertEqual(format, .mp3)
+        XCTAssertTrue(format.isSupported)
+        XCTAssertEqual(format.displayName, "MP3")
+    }
+
+    func test_formatDetect_flac() {
+        let format = AudioFormat.detect(extension: "flac")
+        XCTAssertEqual(format, .flac)
+        XCTAssertTrue(format.isSupported)
+        XCTAssertEqual(format.displayName, "FLAC")
+    }
+
+    func test_formatDetect_ogg_rejected() {
+        let format = AudioFormat.detect(extension: "ogg")
+        XCTAssertEqual(format, .ogg)
+        XCTAssertFalse(format.isSupported)
+        XCTAssertEqual(format.displayName, "OGG")
+    }
 }
