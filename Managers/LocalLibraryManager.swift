@@ -58,7 +58,7 @@ final class LocalLibraryManager: ObservableObject {
         let ext = sourceURL.pathExtension
         let fileName = ext.isEmpty ? id.uuidString : "\(id.uuidString).\(ext)"
         let destURL = libraryDirectory.appendingPathComponent(fileName)
-        try original.write(to: destURL, options: .atomic)
+        try AtomicFileWriter.writeAtomically(original, to: destURL)
 
         let title = (await Self.readTitle(at: destURL, fallback: sourceURL.deletingPathExtension().lastPathComponent))
         let artist = await Self.readArtist(at: destURL)
@@ -233,7 +233,7 @@ final class LocalLibraryManager: ObservableObject {
         }
         let dest = artworkDir.appendingPathComponent("\(trackID.uuidString).\(ext)")
         do {
-            try data.write(to: dest, options: .atomic)
+            try AtomicFileWriter.writeAtomically(data, to: dest)
             return dest
         } catch {
             return nil

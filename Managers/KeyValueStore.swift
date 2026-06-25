@@ -41,7 +41,7 @@ final class JSONFileStore: KeyValueStore {
     }
 
     func save(_ data: Data) throws {
-        try data.write(to: url, options: .atomic)
+        try AtomicFileWriter.writeAtomically(data, to: url)
     }
 }
 
