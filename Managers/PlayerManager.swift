@@ -10,6 +10,7 @@ final class PlayerManager: NSObject, ObservableObject {
     // MARK: - Published state
 
     @Published var currentTrack: Track?
+    @Published private(set) var currentLocalTrack: LocalTrack?
     /// Resolved artwork URL for the current track — either the YouTube
     /// thumbnail (for streamed tracks) or the extracted embedded
     /// artwork file (for local imports). `nil` when no artwork is
@@ -230,6 +231,7 @@ final class PlayerManager: NSObject, ObservableObject {
     /// explicit about which file is being played.
     func play(localTrack: LocalTrack, fileURL: URL) {
         let track = localTrack.asPlayerTrack(fileURL: fileURL)
+        currentLocalTrack = localTrack
         play(track)
     }
 
@@ -910,5 +912,10 @@ final class PlayerManager: NSObject, ObservableObject {
         isUsingEngine = false
         timeDisplayLink?.invalidate()
         timeDisplayLink = nil
+    }
+
+    func stop() {
+        currentTrack = nil
+        currentLocalTrack = nil
     }
 }
