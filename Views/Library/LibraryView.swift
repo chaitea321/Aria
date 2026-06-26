@@ -237,6 +237,9 @@ struct LibraryView: View {
                             favoritesManager.toggle(track.asPlayerTrack(fileURL: libraryManager.fileURL(for: track)))
                         },
                         onPlay: { playOrRepair($0) },
+                        onAddToQueue: { track in
+                            playerManager.addToQueue(track.asPlayerTrack(fileURL: libraryManager.fileURL(for: track)))
+                        },
                         onAddToPlaylist: { addToPlaylistTrack = $0 },
                         onDelete: { libraryManager.remove($0) }
                     )

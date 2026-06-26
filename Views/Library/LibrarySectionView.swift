@@ -12,6 +12,7 @@ struct LibrarySectionView: View {
     let isFavorite: (LocalTrack) -> Bool
     let onToggleFavorite: (LocalTrack) -> Void
     let onPlay: (LocalTrack) -> Void
+    let onAddToQueue: (LocalTrack) -> Void
     let onAddToPlaylist: (LocalTrack) -> Void
     let onDelete: (LocalTrack) -> Void
 
@@ -43,6 +44,17 @@ struct LibrarySectionView: View {
                         onPlay(track)
                     } label: {
                         Label("Play", systemImage: "play.fill")
+                    }
+                    Button {
+                        onAddToQueue(track)
+                    } label: {
+                        Label("Add to Queue", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                    Button {
+                        onToggleFavorite(track)
+                    } label: {
+                        Label(isFavorite(track) ? "Unfavorite" : "Favorite",
+                              systemImage: isFavorite(track) ? "heart.slash" : "heart")
                     }
                     Button {
                         onAddToPlaylist(track)
