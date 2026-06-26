@@ -7,6 +7,10 @@ struct QueueView: View {
 
     private var tokens: DesignTokens { themeManager.tokens }
 
+    @State private var rowFrames: [CGRect] = []
+    @State private var draggingIndex: Int? = nil
+    @State private var dragOffset: CGFloat = 0
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -86,58 +90,37 @@ struct QueueView: View {
     }
 
     private var queueList: some View {
-        List {
-            ForEach(Array(playerManager.queue.enumerated()), id: \.element.id) { index, track in
-                Button {
-                    Haptics.light()
-                    if index == 0 {
-                        playerManager.playNextInQueue()
-                        if playerManager.queue.isEmpty {
-                            dismiss()
-                        }
-                    }
-                } label: {
-                    HStack(spacing: DS.Spacing.sm) {
-                        Text("\(index + 1)")
-                            .font(DS.Typography.captionStrong)
-                            .foregroundColor(tokens.textSecondary)
-                            .frame(width: 24)
-
-                        TrackThumbnail(url: track.thumbnailURL, size: 44, cornerRadius: DS.Radius.sm)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(track.title)
-                                .font(DS.Typography.bodyEm)
-                                .lineLimit(1)
-                                .foregroundColor(tokens.textPrimary)
-                            Text(track.artist)
-                                .font(DS.Typography.caption)
-                                .lineLimit(1)
-                                .foregroundColor(tokens.textSecondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(Array(playerManager.queue.enumerated()), id: \.element.id) { index, track in
+                    DraggableQueueRow(
+                        track: track,
+                        index: index,
+                        isCurrent: index == 0,
+                        onTap: { onRowTap(index) },
+                        onReorder: { from, to in
+                            let safeTo = min(to, playerManager.queue.count - 1)
+                            playerManager.moveQueueItem(from: IndexSet(integer: from), to: safeTo)
+                        },
+                        rowFrames: $rowFrames,
+                        draggingIndex: $draggingIndex,
+                        dragOffset: $dragOffset
+                    )
+                    .padding(.horizontal, DS.Spacing.lg)
+                    .padding(.vertical, 4)
                 }
-                .buttonStyle(.plain)
-                .listRowBackground(tokens.background)
-                .listRowSeparatorTint(tokens.hairline)
-                .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.lg, bottom: 4, trailing: DS.Spacing.lg))
-            }
-            .onDelete { offsets in
-                for idx in offsets.sorted(by: >) {
-                    playerManager.removeFromQueue(at: idx)
-                }
-            }
-
-            Section {
-                Color.clear.frame(height: 60)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .coordinateSpace(name: "QueueList")
+    }
+
+    private func onRowTap(_ index: Int) {
+        Haptics.light()
+        if index == 0 {
+            playerManager.playNextInQueue()
+            if playerManager.queue.isEmpty {
+                dismiss()
+            }
+        }
     }
 }
