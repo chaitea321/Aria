@@ -2,6 +2,7 @@ import Foundation
 import MediaPlayer
 import Combine
 import AVFoundation
+import SwiftUI
 import os.log
 
 private let log = Logger(subsystem: "com.aria.music", category: "PlayerManager")
@@ -445,6 +446,12 @@ final class PlayerManager: NSObject, ObservableObject {
     func removeFromQueue(at index: Int) {
         guard queue.indices.contains(index) else { return }
         queue.remove(at: index)
+    }
+
+    func moveQueueItem(from source: IndexSet, to destination: Int) {
+        var copy = queue
+        copy.move(fromOffsets: source, toOffset: destination)
+        queue = copy
     }
 
     func clearQueue() {
