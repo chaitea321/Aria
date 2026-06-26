@@ -144,6 +144,7 @@ final class LocalLibraryManager: ObservableObject {
         let album = await Self.readAlbum(at: destURL)
         let storedSize = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? Int64) ?? Int64(original.count)
         let duration = await Self.readDuration(at: destURL)
+        let (audioFormat, audioQuality) = await AudioMetadataReader.readAll(at: destURL)
         let artworkURL = await extractArtwork(from: destURL, trackID: id)
 
         let track = LocalTrack(
@@ -155,7 +156,9 @@ final class LocalLibraryManager: ObservableObject {
             importedAt: Date(),
             fileSizeBytes: storedSize,
             durationSeconds: duration,
-            album: album
+            album: album,
+            audioFormat: audioFormat,
+            audioQuality: audioQuality
         )
         tracks.insert(track, at: 0)
         save()
