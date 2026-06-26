@@ -10,7 +10,9 @@ struct LibraryTrackRow: View {
     let isCurrentTrack: Bool
     let isPlaying: Bool
     let tokens: DesignTokens
+    let isFavorite: Bool
     let onTap: () -> Void
+    let onToggleFavorite: () -> Void
 
     var body: some View {
         Button(action: onTap) {
@@ -39,6 +41,10 @@ struct LibraryTrackRow: View {
                     }
                     .font(.caption2)
                     .foregroundColor(tokens.textSecondary)
+
+                    if track.audioFormat != nil || track.audioQuality != nil {
+                        qualityPill
+                    }
                 }
 
                 Spacer()
@@ -53,10 +59,44 @@ struct LibraryTrackRow: View {
                     Image(systemName: isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
                         .foregroundColor(tokens.accent)
                 }
+
+                Button {
+                    onToggleFavorite()
+                } label: {
+                    Image(systemName: isFavorite ? "heart.fill" : "heart")
+                        .foregroundColor(isFavorite ? .red : tokens.textSecondary)
+                        .font(.system(size: 18))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isFavorite ? "Unfavorite" : "Favorite")
             }
         }
         .buttonStyle(.plain)
         .opacity(track.isMissing ? 0.55 : 1.0)
+    }
+
+    private var qualityPill: some View {
+        HStack(spacing: 4) {
+            if let format = track.audioFormat {
+                Text(format.displayName)
+                    .font(.caption2.weight(.medium))
+            }
+            if let quality = track.audioQuality, !quality.pillText.isEmpty {
+                Text("•")
+                    .font(.caption2)
+                    .foregroundColor(tokens.textSecondary)
+                Text(quality.pillText)
+                    .font(.caption2.weight(.medium))
+            }
+        }
+        .foregroundColor((track.audioQuality?.isHiRes ?? false) ? tokens.accent : tokens.textSecondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(tokens.cardSurface.opacity(0.6))
+        )
     }
 
     @ViewBuilder

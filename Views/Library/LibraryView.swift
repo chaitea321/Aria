@@ -6,6 +6,7 @@ struct LibraryView: View {
     @EnvironmentObject private var playerManager: PlayerManager
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var playlistsManager: PlaylistsManager
+    @EnvironmentObject private var favoritesManager: FavoritesManager
     @EnvironmentObject private var nav: NavigationCoordinator
 
     @State private var isImporting = false
@@ -231,6 +232,10 @@ struct LibraryView: View {
                         tokens: tokens,
                         isCurrentTrack: isCurrentTrack,
                         isPlaying: playerManager.isPlaying,
+                        isFavorite: { favoritesManager.isFavorite($0.asPlayerTrack(fileURL: libraryManager.fileURL(for: $0))) },
+                        onToggleFavorite: { track in
+                            favoritesManager.toggle(track.asPlayerTrack(fileURL: libraryManager.fileURL(for: track)))
+                        },
                         onPlay: { playOrRepair($0) },
                         onAddToPlaylist: { addToPlaylistTrack = $0 },
                         onDelete: { libraryManager.remove($0) }

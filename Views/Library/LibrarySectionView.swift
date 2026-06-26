@@ -9,6 +9,8 @@ struct LibrarySectionView: View {
     let tokens: DesignTokens
     let isCurrentTrack: (LocalTrack) -> Bool
     let isPlaying: Bool
+    let isFavorite: (LocalTrack) -> Bool
+    let onToggleFavorite: (LocalTrack) -> Void
     let onPlay: (LocalTrack) -> Void
     let onAddToPlaylist: (LocalTrack) -> Void
     let onDelete: (LocalTrack) -> Void
@@ -28,7 +30,9 @@ struct LibrarySectionView: View {
                     isCurrentTrack: isCurrentTrack(track),
                     isPlaying: isPlaying,
                     tokens: tokens,
-                    onTap: { onPlay(track) }
+                    isFavorite: isFavorite(track),
+                    onTap: { onPlay(track) },
+                    onToggleFavorite: { onToggleFavorite(track) }
                 )
                 .padding(.horizontal)
                 .padding(.vertical, 4)
