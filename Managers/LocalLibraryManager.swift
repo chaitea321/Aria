@@ -18,6 +18,10 @@ final class LocalLibraryManager: ObservableObject {
 
     @Published private(set) var tracks: [LocalTrack] = []
 
+    private lazy var coverFallback: CoverFallbackService = {
+        CoverFallbackService(baseURL: URL(string: PlayerManager.backendURL)!)
+    }()
+
     private let store: KeyValueStore
     private let libraryDirectory: URL
     private let fileManager: FileManager
@@ -145,13 +149,25 @@ final class LocalLibraryManager: ObservableObject {
         let storedSize = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? Int64) ?? Int64(original.count)
         let duration = await Self.readDuration(at: destURL)
         let (audioFormat, audioQuality) = await AudioMetadataReader.readAll(at: destURL)
-        let artworkURL = await extractArtwork(from: destURL, trackID: id)
+        let embeddedArt = await extractArtwork(from: destURL, trackID: id)
+        var finalArt: URL? = embeddedArt
+        if finalArt == nil, let tempURL = await coverFallback.fetch(title: title, artist: artist, album: album) {
+            let artworkDir = libraryDirectory.appendingPathComponent("artwork", isDirectory: true)
+            do {
+                try fileManager.createDirectory(at: artworkDir, withIntermediateDirectories: true)
+                let dest = artworkDir.appendingPathComponent("\(id.uuidString).\(tempURL.pathExtension)")
+                try fileManager.moveItem(at: tempURL, to: dest)
+                finalArt = dest
+            } catch {
+                finalArt = nil
+            }
+        }
 
         let track = LocalTrack(
             id: id,
             title: title,
             artist: artist,
-            artworkURL: artworkURL,
+            artworkURL: finalArt,
             fileName: fileName,
             importedAt: Date(),
             fileSizeBytes: storedSize,
