@@ -18,6 +18,8 @@ struct LocalTrack: Identifiable, Codable, Hashable {
     let durationSeconds: Double?
     let album: String?
     let isMissing: Bool
+    let audioFormat: AudioCodecInfo?
+    let audioQuality: AudioQuality?
 
     init(
         id: UUID,
@@ -29,7 +31,9 @@ struct LocalTrack: Identifiable, Codable, Hashable {
         fileSizeBytes: Int64,
         durationSeconds: Double?,
         album: String? = nil,
-        isMissing: Bool = false
+        isMissing: Bool = false,
+        audioFormat: AudioCodecInfo? = nil,
+        audioQuality: AudioQuality? = nil
     ) {
         self.id = id
         self.title = title
@@ -41,6 +45,8 @@ struct LocalTrack: Identifiable, Codable, Hashable {
         self.durationSeconds = durationSeconds
         self.album = album
         self.isMissing = isMissing
+        self.audioFormat = audioFormat
+        self.audioQuality = audioQuality
     }
 
     /// Converts this library entry to a `Track` suitable for playback
