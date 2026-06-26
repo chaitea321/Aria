@@ -158,7 +158,8 @@ final class TLSPinningDelegateTests: XCTestCase {
         // Skip if the dev host is the placeholder (the public source has
         // the RFC 5737 placeholder; this test requires a real reachable
         // host to exercise the full URLSession → TLS → pin path).
-        let backendHost = Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
+        let appBundle = Bundle(for: PlayerManager.self)
+        let backendHost = appBundle.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
         try XCTSkipIf(
             backendHost == "192.0.2.1",
             "Skipped: ARIA_HOMELAB_HOST is the placeholder (192.0.2.1). Set the Info.plist key to your Tailscale IP to run this live integration test."
