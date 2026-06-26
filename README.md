@@ -67,6 +67,29 @@ respective managers.
 Open `Aria.xcodeproj` in Xcode 26.5+ and run the `Aria - Music Browser`
 scheme on an iOS 16.6+ simulator or device.
 
+## Local library features (B5)
+
+Beyond the core YouTube-streaming experience, the local library now
+makes imported tracks feel first-class:
+
+- **Codec + quality metadata** at import time — `FLAC 24/96`, `MP3 320`,
+  `AAC 256`, `ALAC`, `PCM` shown as a quality pill in the library row
+  and a more detailed caption in the Now Playing screen.
+- **Hi-res accent** — quality pill uses the accent color for tracks
+  above 16-bit or 48 kHz so hi-res files stand out.
+- **Embedded-art + Google Images fallback** — tracks without embedded
+  art get a one-shot Google Images lookup via the backend `/api/cover`
+  endpoint at import time. No re-fetch on playback.
+- **Musi-style queue reordering** — long-press a row in the queue to
+  grab it, drag to the new slot, release. No edit mode.
+- **Favorites heart** — tap the heart on a library row (or use the
+  context menu) to add/remove from the global Favorites tab.
+- **Add to Queue from Library** — long-press a library row → "Add to
+  Queue" to append without replacing.
+- **Local tracks in unified views** — local tracks appear in the
+  Favorites and Recently Played tabs alongside YouTube tracks, with
+  the existing `Track.isLocal` cue.
+
 CLI build:
 
 ```sh
