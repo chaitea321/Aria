@@ -87,6 +87,12 @@ final class PlayerManager: NSObject, ObservableObject {
     private var engineNode: AVAudioPlayerNode?
     private var eqUnit: AVAudioUnitEQ?
     private var scheduleGeneration: Int = 0
+    /// Absolute track position (seconds) the engine's AVAssetReader was told
+    /// to start from. The AVAudioPlayerNode's own sample clock always restarts
+    /// at 0 on each (re)start, so `pollEngineTime` adds this offset to recover
+    /// the true position — without it the seek bar desyncs from the audio by
+    /// exactly the seek amount.
+    private var engineSeekOffset: TimeInterval = 0
 
     // MARK: - Playback control
 
@@ -619,7 +625,7 @@ final class PlayerManager: NSObject, ObservableObject {
         nowPlaying.configureRemoteCommands()
         setupEngine()
 
-        guard let engine, engineNode != nil, eqUnit != nil else {
+        guard let engine, let node = engineNode, let eqUnit = eqUnit else {
             isStartingEngine = false
             fallbackToPlayer(fileURL: fileURL)
             return
@@ -639,9 +645,34 @@ final class PlayerManager: NSObject, ObservableObject {
         let sampleRate = format?.mSampleRate ?? 44100
         let channels = format?.mChannelsPerFrame ?? 2
 
+        let bufferFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: AVAudioChannelCount(channels), interleaved: false)
+            ?? AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: AVAudioChannelCount(channels))!
+
+        // Reconnect the player node with the *source file's* format so the
+        // scheduled buffers match the node's output format. The engine is
+        // created once and reused across tracks, so a previous track's sample
+        // rate (or the nil-inferred hardware rate) can mismatch this track —
+        // scheduleBuffer then traps on
+        // `_outputFormat.sampleRate == buffer.format.sampleRate`. This is the
+        // most common AVAudioEngine crash and is hit hardest by hi-res local
+        // files (e.g. 96 kHz FLAC) whose rate differs from the 44.1/48 kHz
+        // default. The mainMixerNode handles conversion to the hardware rate.
+        node.stop()
+        engine.disconnectNodeOutput(node)
+        engine.disconnectNodeOutput(eqUnit)
+        engine.connect(node, to: eqUnit, format: bufferFormat)
+        engine.connect(eqUnit, to: engine.mainMixerNode, format: bufferFormat)
+
+        // AVLinearPCMBitDepthKey is REQUIRED whenever AVLinearPCMIsFloatKey is
+        // set: on-device `AVAssetReaderAudioMixOutput` throws
+        // NSInvalidArgumentException ("If one of AVLinearPCMIsFloatKey and
+        // AVLinearPCMBitDepthKey is specified, both must be specified") if it's
+        // missing. The simulator tolerates the omission; hardware does not.
+        // 32-bit float matches the .pcmFormatFloat32 bufferFormat above.
         let outputSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVLinearPCMIsFloatKey: true,
+            AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsNonInterleaved: true,
             AVNumberOfChannelsKey: channels,
             AVSampleRateKey: sampleRate,
@@ -653,14 +684,19 @@ final class PlayerManager: NSObject, ObservableObject {
             return
         }
 
+        var startOffset: TimeInterval = 0
         if let seek = seekTarget, seek > 0 {
             let cmSeek = CMTime(seconds: seek, preferredTimescale: 600)
             let remaining = CMTimeSubtract(asset.duration, cmSeek)
             if CMTIME_IS_VALID(remaining) && CMTimeGetSeconds(remaining) > 0 {
                 reader.timeRange = CMTimeRange(start: cmSeek, duration: remaining)
+                startOffset = seek
             }
             seekTarget = nil
         }
+        // Record where the reader actually starts so pollEngineTime can report
+        // an absolute position (0 for a fresh play, the seek point otherwise).
+        engineSeekOffset = startOffset
 
         let readerOutput = AVAssetReaderAudioMixOutput(audioTracks: [audioTrack], audioSettings: outputSettings)
         readerOutput.alwaysCopiesSampleData = false
@@ -679,9 +715,6 @@ final class PlayerManager: NSObject, ObservableObject {
                 return
             }
         }
-
-        let bufferFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: AVAudioChannelCount(channels), interleaved: false)
-            ?? AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: AVAudioChannelCount(channels))!
 
         scheduleGeneration += 1
         let gen = scheduleGeneration
@@ -710,6 +743,12 @@ final class PlayerManager: NSObject, ObservableObject {
                         self.engineNode?.play()
                         self.isPlaying = true
                         self.playbackState = .playing
+                        // The "starting" phase is over once the first buffer is
+                        // playing. Leaving this true (as before) meant it stayed
+                        // set for the whole track, so seekEngine()'s restart hit
+                        // `guard !isStartingEngine` and bailed after it had already
+                        // stopped the node — seeking/skipping killed playback.
+                        self.isStartingEngine = false
                         self.startTimeDisplayLink()
                         self.nowPlaying.updateNowPlaying()
                     }
@@ -762,30 +801,25 @@ final class PlayerManager: NSObject, ObservableObject {
         let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
         guard frameCount > 0 else { return nil }
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return nil }
+        pcmBuffer.frameLength = AVAudioFrameCount(frameCount)
 
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
-
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        var totalLength = 0
-        CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
-
-        guard let src = dataPointer, totalLength > 0 else { return nil }
-
-        let channelCount = Int(format.channelCount)
-        let bytesPerChannel = totalLength / channelCount
-        let floatCount = bytesPerChannel / MemoryLayout<Float>.size
-        let actualFrameCount = min(floatCount, Int(frameCount))
-        guard actualFrameCount > 0 else { return nil }
-
-        for ch in 0..<channelCount {
-            if let dst = pcmBuffer.floatChannelData?[ch] {
-                let offset = ch * floatCount
-                let srcFloats = src.withMemoryRebound(to: Float.self, capacity: totalLength / MemoryLayout<Float>.size) { $0 }
-                dst.update(from: srcFloats + offset, count: actualFrameCount)
-            }
+        // Let CoreMedia copy the decoded PCM into the buffer's audioBufferList.
+        // The previous hand-rolled pointer arithmetic assumed the CMBlockBuffer
+        // was contiguous and planar with a channel count matching `format` —
+        // none of which is guaranteed. Non-contiguous block buffers, mono
+        // sources, or interleaved data all caused out-of-bounds reads (crash /
+        // corruption), most often on local FLAC/ALAC imports. This API handles
+        // contiguity and layout correctly per the sample buffer's own format.
+        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer,
+            at: 0,
+            frameCount: Int32(frameCount),
+            into: pcmBuffer.mutableAudioBufferList
+        )
+        guard status == noErr else {
+            log.error("PCM copy failed: OSStatus \(status, privacy: .public)")
+            return nil
         }
-
-        pcmBuffer.frameLength = AVAudioFrameCount(actualFrameCount)
         return pcmBuffer
     }
 
@@ -821,6 +855,11 @@ final class PlayerManager: NSObject, ObservableObject {
     private func seekEngine(to time: TimeInterval) {
         engineNode?.stop()
         scheduleGeneration += 1
+        // This is a deliberate restart: clear the starting guard so the
+        // startEngine() call below isn't rejected by `guard !isStartingEngine`.
+        // The scheduleGeneration bump above already invalidates the prior
+        // schedule loop, so there's no double-start risk.
+        isStartingEngine = false
 
         seekTarget = time
         if let fileURL = downloadedFileURL {
@@ -844,7 +883,10 @@ final class PlayerManager: NSObject, ObservableObject {
         guard let node = engineNode, node.isPlaying,
               let lastTime = node.lastRenderTime,
               let playerTime = node.playerTime(forNodeTime: lastTime) else { return }
-        currentTime = Double(playerTime.sampleTime) / playerTime.sampleRate
+        // playerTime.sampleTime is relative to the node's last start (always 0
+        // after a seek/restart); add the reader's start offset for the true
+        // absolute track position so the seek bar tracks the audio.
+        currentTime = engineSeekOffset + Double(playerTime.sampleTime) / playerTime.sampleRate
         nowPlaying.updateNowPlaying()
     }
 
