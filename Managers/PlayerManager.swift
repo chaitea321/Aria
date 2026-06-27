@@ -657,9 +657,16 @@ final class PlayerManager: NSObject, ObservableObject {
         engine.connect(node, to: eqUnit, format: bufferFormat)
         engine.connect(eqUnit, to: engine.mainMixerNode, format: bufferFormat)
 
+        // AVLinearPCMBitDepthKey is REQUIRED whenever AVLinearPCMIsFloatKey is
+        // set: on-device `AVAssetReaderAudioMixOutput` throws
+        // NSInvalidArgumentException ("If one of AVLinearPCMIsFloatKey and
+        // AVLinearPCMBitDepthKey is specified, both must be specified") if it's
+        // missing. The simulator tolerates the omission; hardware does not.
+        // 32-bit float matches the .pcmFormatFloat32 bufferFormat above.
         let outputSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVLinearPCMIsFloatKey: true,
+            AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsNonInterleaved: true,
             AVNumberOfChannelsKey: channels,
             AVSampleRateKey: sampleRate,
