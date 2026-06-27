@@ -87,6 +87,12 @@ final class PlayerManager: NSObject, ObservableObject {
     private var engineNode: AVAudioPlayerNode?
     private var eqUnit: AVAudioUnitEQ?
     private var scheduleGeneration: Int = 0
+    /// Absolute track position (seconds) the engine's AVAssetReader was told
+    /// to start from. The AVAudioPlayerNode's own sample clock always restarts
+    /// at 0 on each (re)start, so `pollEngineTime` adds this offset to recover
+    /// the true position — without it the seek bar desyncs from the audio by
+    /// exactly the seek amount.
+    private var engineSeekOffset: TimeInterval = 0
 
     // MARK: - Playback control
 
@@ -678,14 +684,19 @@ final class PlayerManager: NSObject, ObservableObject {
             return
         }
 
+        var startOffset: TimeInterval = 0
         if let seek = seekTarget, seek > 0 {
             let cmSeek = CMTime(seconds: seek, preferredTimescale: 600)
             let remaining = CMTimeSubtract(asset.duration, cmSeek)
             if CMTIME_IS_VALID(remaining) && CMTimeGetSeconds(remaining) > 0 {
                 reader.timeRange = CMTimeRange(start: cmSeek, duration: remaining)
+                startOffset = seek
             }
             seekTarget = nil
         }
+        // Record where the reader actually starts so pollEngineTime can report
+        // an absolute position (0 for a fresh play, the seek point otherwise).
+        engineSeekOffset = startOffset
 
         let readerOutput = AVAssetReaderAudioMixOutput(audioTracks: [audioTrack], audioSettings: outputSettings)
         readerOutput.alwaysCopiesSampleData = false
@@ -872,7 +883,10 @@ final class PlayerManager: NSObject, ObservableObject {
         guard let node = engineNode, node.isPlaying,
               let lastTime = node.lastRenderTime,
               let playerTime = node.playerTime(forNodeTime: lastTime) else { return }
-        currentTime = Double(playerTime.sampleTime) / playerTime.sampleRate
+        // playerTime.sampleTime is relative to the node's last start (always 0
+        // after a seek/restart); add the reader's start offset for the true
+        // absolute track position so the seek bar tracks the audio.
+        currentTime = engineSeekOffset + Double(playerTime.sampleTime) / playerTime.sampleRate
         nowPlaying.updateNowPlaying()
     }
 
