@@ -17,12 +17,23 @@ final class EQCache {
 
     /// Returns the on-disk URL where a cached version of `stream` should live.
     /// The directory is created on demand.
+    ///
+    /// The source file extension is preserved on the cached filename:
+    /// `AVURLAsset` / `AVAssetReader` rely on the extension to pick the
+    /// container parser, and an extensionless file makes
+    /// `tracks(withMediaType: .audio)` return empty — which silently broke the
+    /// EQ engine path for streamed (YouTube) tracks, forcing a fallback to the
+    /// no-EQ AVPlayer every time. Local files kept their extension, so only
+    /// streaming was affected.
     func cacheURL(for stream: URL) -> URL {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         let dir = caches.appendingPathComponent(folderName, isDirectory: true)
         try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(Self.sha256(stream.absoluteString))
+        let hashed = Self.sha256(stream.absoluteString)
+        let ext = stream.pathExtension
+        let fileName = ext.isEmpty ? hashed : "\(hashed).\(ext)"
+        return dir.appendingPathComponent(fileName)
     }
 
     /// Removes the entire cache directory.
