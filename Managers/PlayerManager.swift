@@ -732,6 +732,12 @@ final class PlayerManager: NSObject, ObservableObject {
                         self.engineNode?.play()
                         self.isPlaying = true
                         self.playbackState = .playing
+                        // The "starting" phase is over once the first buffer is
+                        // playing. Leaving this true (as before) meant it stayed
+                        // set for the whole track, so seekEngine()'s restart hit
+                        // `guard !isStartingEngine` and bailed after it had already
+                        // stopped the node — seeking/skipping killed playback.
+                        self.isStartingEngine = false
                         self.startTimeDisplayLink()
                         self.nowPlaying.updateNowPlaying()
                     }
@@ -838,6 +844,11 @@ final class PlayerManager: NSObject, ObservableObject {
     private func seekEngine(to time: TimeInterval) {
         engineNode?.stop()
         scheduleGeneration += 1
+        // This is a deliberate restart: clear the starting guard so the
+        // startEngine() call below isn't rejected by `guard !isStartingEngine`.
+        // The scheduleGeneration bump above already invalidates the prior
+        // schedule loop, so there's no double-start risk.
+        isStartingEngine = false
 
         seekTarget = time
         if let fileURL = downloadedFileURL {
