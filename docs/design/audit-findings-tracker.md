@@ -6,6 +6,25 @@ Source: the initial multi-agent "ultracode" sweep (96 agents, ~4.4M tokens, 85 v
 
 Legend: ✅ done · 🟡 partial · ⬜ open. Severity from the original sweep. "Evidence" is the verifier's current-code justification.
 
+## Update 2026-06-28 — EQ tap rewrite merged
+
+The EQ playback path was rewritten from download-then-`AVAudioEngine` to a
+real-time `MTAudioProcessingTap` on `AVPlayer` (one path, streamed + local). This
+resolves several findings the per-row tables below still list as open/partial:
+
+- ✅ **Bring EQ to the streaming path so enabling EQ doesn't force a full download**
+  (was XL/open) — EQ is now instant via the tap; no download.
+- ✅ **Stream the EQ download to disk instead of buffering in RAM** (was partial)
+  — moot: there is no EQ download anymore.
+- ✅ **Make engine seek incremental instead of re-decoding** (was open) — moot:
+  `AVPlayer` does native seek; the `AVAssetReader` engine is gone.
+- ✅ **Bound the EQ audio cache** (was open) — moot: `EQCache` deleted.
+- 🟡 **Decompose the 914-line PlayerManager god object** (was open → improved) —
+  ~640 lines of engine/swap code removed; the dual-path flag soup is gone.
+  Remaining: `AVPlayerPath` could still be split further.
+
+(The per-dimension tables below predate this and aren't individually re-marked.)
+
 ## Addressed this session (done / partial)
 
 - 🟡 partial · *high* — Stream the EQ download to disk instead of buffering the whole file in RAM
