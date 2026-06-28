@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+song_cache/
+*.pyc
+*.pyo
+.env
+.pytest_cache/
+.access_times.json

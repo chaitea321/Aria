@@ -1,0 +1,20 @@
+[Unit]
+Description=Aria Backend
+Documentation=https://github.com/yourusername/MusicAppIOS
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chait
+WorkingDirectory=/home/chait/MusicAppIOS/backend
+Environment=MAX_CACHE_GB=5
+Environment=CACHE_EVICT_GRACE_SECONDS=300
+ExecStart=/home/chait/MusicAppIOS/backend/.venv/bin/python3 -m uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

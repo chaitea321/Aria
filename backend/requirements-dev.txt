@@ -1,0 +1,5 @@
+# Test/CI-only dependencies. Installed on top of requirements.txt.
+# httpx is required by FastAPI's TestClient; pytest runs the suite.
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27

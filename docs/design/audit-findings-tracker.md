@@ -2,7 +2,7 @@
 
 Source: the initial multi-agent "ultracode" sweep (96 agents, ~4.4M tokens, 85 verified findings), re-verified against the **current** code on 2026-06-27 by an 11-agent status pass (one per dimension).
 
-**Status: 9 done · 15 partial · 61 open** (of 85). Status reflects the `feat/progressive-radio` branch (stacked on the EQ fixes) + deployed `backend/app.py`.
+**Status: 19 done · 13 partial · 53 open** (of 85). Status reflects the `feat/progressive-radio` branch (stacked on the EQ fixes) + the `feat/llmops-backend-hardening` branch (backend vendored into the repo at `backend/`).
 
 Legend: ✅ done · 🟡 partial · ⬜ open. Severity from the original sweep. "Evidence" is the verifier's current-code justification.
 
@@ -24,6 +24,39 @@ resolves several findings the per-row tables below still list as open/partial:
   Remaining: `AVPlayerPath` could still be split further.
 
 (The per-dimension tables below predate this and aren't individually re-marked.)
+
+## Update 2026-06-28 — LLMOps backend hardening merged
+
+The backend was **vendored into the Aria repo** (`backend/`) as the single
+source of truth and given a real observability/reliability layer. Deploy is now
+`scp backend/app.py …` from the repo (see `backend/README.md`). The following
+findings from the LLMOps track are resolved (rows below updated in place):
+
+- ✅ **Structured logging + request IDs + latency metrics** — `logging` config,
+  an ASGI middleware that stamps `X-Request-ID` and records p50/p95 per
+  endpoint, `/api/metrics`, and an enriched `/api/health` (yt-dlp version, node
+  status, uptime, error rate). print() is gone.
+- ✅ **Persist LRU access metadata to disk** — `.access_times.json`, loaded on
+  startup, throttled saves, flushed on shutdown/eviction/clear.
+- ✅ **Pin + auto-update yt-dlp** — floor-pinned in `requirements.txt`;
+  `update-yt-dlp.sh` + `aria-yt-dlp-update.timer` keep it current.
+- ✅ **Validate downloads + sweep partials** — size/ffprobe validation before
+  serving; startup sweep of `.part`/`.ytdl`/zero-byte; corrupt downloads discarded.
+- ✅ **Disk-full guard** — `shutil.disk_usage` precheck → 507 before download.
+- ✅ **Format-aware cache key** — files tagged `{id}.bestaudio.*`, deterministic
+  m4a-preferred lookup (no more arbitrary `matches[0]`).
+- ✅ **Node detection** — env → `shutil.which` → common paths, with a startup
+  check and health report.
+- ✅ **CI** — `.github/workflows/ci.yml` runs backend py_compile+pytest (linux)
+  and iOS `xcodebuild test` (macOS) on every push/PR.
+- ✅ **Backend test suite** — 44 pytest/TestClient cases (eviction, rate limit,
+  single-flight, retry classification, validation, disk guard, resolve/radio,
+  metrics, persisted LRU).
+- ✅ **Health alerting / uptime monitoring** — `healthcheck.sh` +
+  `aria-healthcheck.timer` (run off-box / external monitor recommended).
+
+Still **partial** in this track: resolved-format-URL caching (extraction still
+re-runs per `/api/resolve`).
 
 ## Addressed this session (done / partial)
 
@@ -70,13 +103,13 @@ resolves several findings the per-row tables below still list as open/partial:
 | Status | Sev | Effort | Finding | Evidence (current code) |
 |---|---|---|---|---|
 | ✅ done | critical | M | Add a multi-client yt-dlp fallback chain instead of a single android_vr client | _YTDL_PLAYER_CLIENTS = ["android_vr","ios","tv_embedded","web"] is now an ordered fallback list passed to both _download_sync (app.py:149) and _resolve_sync (app.py:236); search uses extract_flat with no stream extraction so it doesn't need it. |
-| ⬜ open | high | S | Persist LRU access metadata to disk so eviction survives restarts | _stream_access_times is still in-memory only (app.py:69); lifespan recomputes only _total_cache_bytes not access times (app.py:48-63); eviction still uses _stream_access_times.get(vid, 0) (app.py:315) so all files read as epoch-0 after restart. |
-| ⬜ open | high | S | Pin and auto-update yt-dlp rather than leaving it unversioned | requirements.txt:3 still lists bare 'yt-dlp' with no pin; no update cron/timer or self-update wired; /api/health (app.py:524-534) does not surface the yt-dlp version. |
-| ⬜ open | high | M | Validate downloaded files and clean up partial/corrupt artifacts before serving | post-download path just adds cached.stat().st_size (app.py:387-393) with no size/ffprobe integrity check; _find_cached_file (app.py:295-296) still returns matches[0] without skipping .part/zero-byte files; no temp-file sweep in lifespan. (download_ranges/MAX_DURATION/max_filesize are pre-download… |
-| 🟡 partial | high | S | Stop hard-coding the node binary path; detect it or make it configurable | js_runtimes node path is now os.environ.get("NODE_PATH", "/usr/bin/node") in all three callers (app.py:150,206,237) — env-configurable, but still defaults to a hard-coded /usr/bin/node with no shutil.which fallback and no startup/health check. |
+| ✅ done | high | S | Persist LRU access metadata to disk so eviction survives restarts | `_load_access_times`/`_save_access_times` persist `_stream_access_times` to `song_cache/.access_times.json`; lifespan loads it on startup, `_record_access` saves (throttled), shutdown/eviction/clear flush. Eviction order survives restart. Covered by `test_access_times_survive_reload`. |
+| ✅ done | high | S | Pin and auto-update yt-dlp rather than leaving it unversioned | requirements.txt floor-pins `yt-dlp>=2026.6.9` (fastapi/uvicorn exact); `update-yt-dlp.sh` + `aria-yt-dlp-update.timer` upgrade daily and restart only on change; `/api/health` now reports `yt_dlp_version`. |
+| ✅ done | high | M | Validate downloaded files and clean up partial/corrupt artifacts before serving | `_is_valid_media` (size + ffprobe-if-present) gates serving; failed downloads are unlinked and counted (`invalid_media`); `_find_cached_file` skips `.part`/`.ytdl`/zero-byte; `_cleanup_partial_files` sweeps junk on startup. Covered by validation/cleanup tests. |
+| ✅ done | high | S | Stop hard-coding the node binary path; detect it or make it configurable | `_detect_node_path()`: env `NODE_PATH` (if a real file) → `shutil.which("node")` → common paths → None (then yt-dlp self-discovers). Resolved once at boot, logged at startup, surfaced in `/api/health.node`. Covered by 3 detection tests. |
 | 🟡 partial | high | M | Serialized single-download semaphore collides with the client's 15s request timeout | download concurrency raised from 1 to env-tunable DOWNLOAD_CONCURRENCY=2 (app.py:74) and new /api/resolve returns a direct stream URL without downloading (app.py:457-482), which the non-EQ client path now uses (PlayerManager.swift:581); but the engine//api/play path still does a full serialized d… |
-| ⬜ open | medium | M | Make the cache key include format/quality, not just video_id | outtmpl is still %(id)s.%(ext)s (app.py:148) and _find_cached_file still globs {video_id}.* returning matches[0] (app.py:295-296) — no format/version discriminator, no deterministic .m4a preference or size validation. |
-| ⬜ open | medium | M | Add disk-full handling and structured failure observability | eviction still keys off _total_cache_bytes not shutil.disk_usage (app.py:307); no free-space precheck before download; failures are still print() + generic HTTPException(500) (app.py:382); /api/health (app.py:524-534) reports only counts/sizes/access_tracked, no failure metrics, yt-dlp version, o… |
+| ✅ done | medium | M | Make the cache key include format/quality, not just video_id | outtmpl is now `{id}.bestaudio.%(ext)s` (`AUDIO_FORMAT_TAG`), and `_find_cached_file` resolves deterministically by extension preference (m4a first), skipping junk — no more arbitrary `matches[0]`. Legacy untagged files still resolve as a fallback. Covered by `test_find_cached_file_prefers_m4a`. |
+| ✅ done | medium | M | Add disk-full handling and structured failure observability | `_check_disk_space(MAX_FILESIZE_BYTES)` runs before download → 507 if free < `MIN_FREE_DISK_BYTES`; failures are typed (429/401/400/404/502/507) and logged via `logging`; `/api/metrics` exposes p50/p95 + `failures_by_reason`; `/api/health` reports error_rate, versions, node. |
 
 ## Backend — Security & Abuse
 
@@ -168,12 +201,12 @@ resolves several findings the per-row tables below still list as open/partial:
 
 | Status | Sev | Effort | Finding | Evidence (current code) |
 |---|---|---|---|---|
-| ⬜ open | critical | M | Add CI for iOS tests and backend on every push/PR | No CI anywhere: find for .github/.yml/.yaml/Fastfile/render.yaml/Procfile/Dockerfile in worktree and root returns nothing; tests still run only by hand. |
-| ⬜ open | critical | M | Backend has zero automated tests despite owning all playback-critical logic | `find backend -name '*test*'` (excluding .venv) returns nothing; rate-limiter, eviction, single-flight, retry classifier in app.py remain untested. |
+| ✅ done | critical | M | Add CI for iOS tests and backend on every push/PR | `.github/workflows/ci.yml`: `backend` job (ubuntu) runs `py_compile` + `pytest`; `ios` job (macos) runs `xcodebuild test -scheme AriaTests`. Triggers on push to main + all PRs; concurrency-cancels superseded runs. NOTE: the iOS job (runner Xcode/sim names) is unverified on hosted runners — may need a label/version tweak on first run. |
+| ✅ done | critical | M | Backend has zero automated tests despite owning all playback-critical logic | `backend/tests/test_app.py` — 44 pytest/TestClient cases covering eviction, rate limiting, single-flight download, retry classification, video_id validation, file validation, disk guard, node detection, persisted LRU, metrics, and `/api/resolve`+`/api/radio`+`/api/health`. All green locally. |
 | ⬜ open | high | M | No shared iOS↔backend contract; decoders silently drift from the server | Backend search returns duration (app.py:219) but SearchResult still omits it (YouTubeSearchService.swift:60-65); no golden-fixture decode tests exist and live tests still XCTSkip on placeholder host. |
 | 🟡 partial | high | M | Streamed-playback failures are invisible to the user and to any monitor | handleFetchError now sets playerError=.streamFailed (PlayerManager.swift:619) and ContentView shows a 4s toast (ContentView.swift:74), but AVPlayerPath .failed branch (AVPlayerPath.swift:74-78) still only sets .idle with no playerError, there's no Retry affordance, and no MetricKit/telemetry/anal… |
-| 🟡 partial | high | M | Backend uses bare print() with no structured logging, request IDs, or latency metrics | Failure causes now map to honest status codes (429/401/400/404/502 in app.py), but no `import logging`, no middleware, no request_id, no latency/counters, /api/metrics absent, and print() remains at app.py:61,192,332 with /api/play still 500. |
-| ⬜ open | medium | S | No health alerting or uptime monitoring on the Render backend | No render.yaml/Procfile in repo, no uptime check polling /api/health, and aria-backend.service has Restart=always (:14) but no WatchdogSec. |
+| ✅ done | high | M | Backend uses bare print() with no structured logging, request IDs, or latency metrics | `logging` configured; `observability_middleware` stamps a 12-char `X-Request-ID`, logs `rid/ip/method/path/status/ms`, and feeds `_record_metric`; `/api/metrics` exposes p50/p95 + `failures_by_reason`; all `print()` removed. Covered by `test_request_id_header_present` / `test_metrics_endpoint_tracks_requests`. |
+| ✅ done | medium | S | No health alerting or uptime monitoring on the Render backend | `healthcheck.sh` probes `/api/health`, alerts via `ARIA_ALERT_WEBHOOK` on down/degraded/high-error-rate; `aria-healthcheck.timer` runs it every 5 min. README recommends running it off-box (or an external monitor) since a down host can't probe itself. `/api/health` now emits the signals a monitor needs (status, versions, error_rate). |
 | ⬜ open | medium | S | Test suite has no coverage gating and key network/error paths are untested in unit tests | No .xctestplan exists and no codeCoverage in any scheme; no dedicated StreamResolver/YouTubeSearchService error-path unit tests in Tests/ (StreamResolver referenced only by PlayerManagerTests). |
 | ⬜ open | low | S | Live integration tests carry a stale/incorrect skip reason, masking that the contract path is unverified | AriaTests-Info.plist still sets NSAllowsArbitraryLoads (:21-23) yet the stale 'test bundle enforces ATS' comment/XCTSkip persists at YouTubeSearchServiceTests.swift:29-33 and TLSPinningDelegateTests.swift:193-197; real guard is the ARIA_HOMELAB_HOST placeholder. |
 
