@@ -309,11 +309,9 @@ final class PlayerManager: NSObject, ObservableObject {
             nowPlaying.loadArtwork(from: artworkURL)
         }
         currentStreamURL = fileURL
-        if eq.isEnabled {
-            downloadAndPlayEngine(url: fileURL)
-        } else {
-            playAVPlayer(url: fileURL)
-        }
+        // Local files play through AVPlayer too; EQ (if on) is applied by the
+        // real-time tap inside AVPlayerPath — same single path as streaming.
+        playAVPlayer(url: fileURL)
     }
 
     func togglePlayPause() {
@@ -323,21 +321,8 @@ final class PlayerManager: NSObject, ObservableObject {
             pause()
         } else {
             nowPlaying.activateAudioSession()
-            if pendingEngineSwitch, !isUsingEngine {
-                pendingEngineSwitch = false
-                isPlaying = true
-                playbackState = .loading
-                switchToEnginePlayback()
-                nowPlaying.updateNowPlaying()
-                return
-            }
-            if isUsingEngine {
-                if playbackState == .ended { seekEngine(to: 0) }
-                engineNode?.play()
-            } else {
-                if playbackState == .ended { avPlayerPath.replayCurrent() }
-                avPlayerPath.play()
-            }
+            if playbackState == .ended { avPlayerPath.replayCurrent() }
+            avPlayerPath.play()
             isPlaying = true
             playbackState = .playing
         }
@@ -347,19 +332,11 @@ final class PlayerManager: NSObject, ObservableObject {
     private func pause() {
         isPlaying = false
         playbackState = .paused
-        if isUsingEngine {
-            engineNode?.pause()
-        } else {
-            avPlayerPath.pause()
-        }
+        avPlayerPath.pause()
     }
 
     func seek(to time: TimeInterval) {
-        if isUsingEngine {
-            seekEngine(to: time)
-        } else {
-            avPlayerPath.seek(to: time)
-        }
+        avPlayerPath.seek(to: time)
         currentTime = time
         nowPlaying.updateNowPlaying()
     }
@@ -369,63 +346,22 @@ final class PlayerManager: NSObject, ObservableObject {
         handleEQOutcome(outcome)
     }
 
-    /// Streamed tracks run EQ through the real-time AVPlayer tap; local files
-    /// still use the engine (migrating to the tap in a later phase).
-    private var isCurrentTrackLocal: Bool { currentTrack?.localFileURL != nil }
-
     func resetEQ() {
-        let wasEnabled = eq.reset()
-        pendingEngineSwitch = false
-        if !isCurrentTrackLocal {
-            avPlayerPath.setEQEnabled(false)
-            return
-        }
-        if wasEnabled && isUsingEngine {
-            switchBackToPlayer()
-        }
+        _ = eq.reset()
+        avPlayerPath.setEQEnabled(false)
     }
 
     private func handleEQOutcome(_ outcome: EQApplyOutcome) {
-        if !isCurrentTrackLocal {
-            // Streamed: the tap applies EQ live on AVPlayer — no engine, no
-            // download, no playback restart.
-            switch outcome {
-            case .noChange, .stillEnabled:
-                avPlayerPath.updateEQBands(eq.bands)
-            case .becameEnabled:
-                avPlayerPath.updateEQBands(eq.bands)
-                avPlayerPath.setEQEnabled(true)
-            case .becameDisabled:
-                avPlayerPath.setEQEnabled(false)
-            }
-            return
-        }
-
-        // Local files: existing engine path.
+        // EQ runs through the real-time AVPlayer tap for both streamed and
+        // local tracks — live, no engine, no download, no playback restart.
         switch outcome {
-        case .noChange:
-            if isUsingEngine { applyBandsToEngine(eq.bands) }
-        case .becameEnabled, .stillEnabled:
-            if isUsingEngine {
-                applyBandsToEngine(eq.bands)
-            } else if outcome == .becameEnabled {
-                if isPlaying {
-                    switchToEnginePlayback()
-                } else {
-                    pendingEngineSwitch = true
-                }
-            }
+        case .noChange, .stillEnabled:
+            avPlayerPath.updateEQBands(eq.bands)
+        case .becameEnabled:
+            avPlayerPath.updateEQBands(eq.bands)
+            avPlayerPath.setEQEnabled(true)
         case .becameDisabled:
-            pendingEngineSwitch = false
-            if isUsingEngine {
-                switchBackToPlayer()
-            }
-        }
-    }
-
-    private func applyBandsToEngine(_ bands: [Float]) {
-        for i in 0..<10 {
-            eqUnit?.bands[i].gain = bands[i]
+            avPlayerPath.setEQEnabled(false)
         }
     }
 
@@ -444,7 +380,7 @@ final class PlayerManager: NSObject, ObservableObject {
             playNextInQueue()
         } else {
             seek(to: 0)
-            if isUsingEngine { engineNode?.stop() } else { avPlayerPath.pause() }
+            avPlayerPath.pause()
             isPlaying = false
             playbackState = .ended
         }
@@ -731,11 +667,7 @@ final class PlayerManager: NSObject, ObservableObject {
     /// Selector target for the end-of-item notification registered by `AVPlayerPath`.
     @objc func playerItemDidFinish() {
         if repeatMode == .one {
-            if isUsingEngine {
-                seekEngine(to: 0)
-            } else {
-                avPlayerPath.replayCurrent()
-            }
+            avPlayerPath.replayCurrent()
         } else {
             playNextInQueue()
         }
@@ -1008,6 +940,12 @@ final class PlayerManager: NSObject, ObservableObject {
             return nil
         }
         return pcmBuffer
+    }
+
+    private func applyBandsToEngine(_ bands: [Float]) {
+        for i in 0..<10 {
+            eqUnit?.bands[i].gain = bands[i]
+        }
     }
 
     private func setupEngine() {
