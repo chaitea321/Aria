@@ -9,7 +9,9 @@ private let log = Logger(subsystem: "com.aria.music", category: "PlayerManager")
 final class PlayerManager: NSObject, ObservableObject {
     // MARK: - Published state
 
-    @Published var currentTrack: Track?
+    @Published var currentTrack: Track? {
+        didSet { schedulePlaybackSave() }
+    }
     /// Resolved artwork URL for the current track — either the YouTube
     /// thumbnail (for streamed tracks) or the extracted embedded
     /// artwork file (for local imports). `nil` when no artwork is
@@ -21,7 +23,9 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var playbackState: PlaybackState = .idle
     @Published var isShuffled = false
     @Published var repeatMode: RepeatMode = .off
-    @Published var queue: [Track] = []
+    @Published var queue: [Track] = [] {
+        didSet { schedulePlaybackSave() }
+    }
     @Published var playerError: PlayerError?
     /// When a sleep timer is armed, the wall-clock instant it will fire.
     /// `nil` when no timer is active. The view layer observes this to show a
@@ -94,6 +98,19 @@ final class PlayerManager: NSObject, ObservableObject {
 
     static let eqFrequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 
+    /// Bump when `PersistedPlayback`'s on-disk shape needs a migration.
+    static let playbackSchemaVersion = 1
+
+    /// API key sent as `X-API-Key` on backend requests, read from the
+    /// `ARIA_API_KEY` Info.plist key. `nil`/empty means "no key configured"
+    /// (the default in the public source); the client then sends no auth
+    /// header and the backend's opt-in auth stays a no-op.
+    static let apiKey: String? = {
+        let value = Bundle.main.object(forInfoDictionaryKey: "ARIA_API_KEY") as? String
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }()
+
     // MARK: - Subsystems
 
     private var urlSession: URLSessionProtocol!
@@ -105,6 +122,17 @@ final class PlayerManager: NSObject, ObservableObject {
 
     var nowPlaying: NowPlayingService!
     private var avPlayerPath: AVPlayerPath!
+
+    // MARK: - Playback-state persistence
+
+    /// Persists `currentTrack` + `queue` + position so a relaunch restores the
+    /// session. Debounced like the other stores; flushed on background/terminate.
+    private let playbackStore: KeyValueStore
+    private var playbackSaveDebouncer: Debouncer!
+    /// Suppresses persistence writes while `restorePlaybackState()` is seeding
+    /// `@Published` state during init (otherwise the restore would immediately
+    /// re-save what it just loaded).
+    private var isRestoringPlayback = false
 
     // MARK: - Radio (endless similar-song autoplay)
 
@@ -123,6 +151,11 @@ final class PlayerManager: NSObject, ObservableObject {
     var seekTarget: TimeInterval?
     var currentStreamURL: URL?
     var playGeneration = 0
+    /// Position to resume from when (re)loading a track via `play(_:)` — e.g.
+    /// resuming a cold-restored session. Survives `stopAllPlayback()` (which
+    /// clears `seekTarget`) by being applied *after* it, just before the item
+    /// is created.
+    private var pendingResumePosition: TimeInterval?
 
     /// Tracks played before the current one, oldest first. Powers real
     /// Previous-track navigation. Capped to avoid unbounded growth.
@@ -148,30 +181,37 @@ final class PlayerManager: NSObject, ObservableObject {
         self.prefetcher = StreamPrefetcher(resolver: StreamResolver(session: session))
         self.radioService = RadioService(session: session)
         self.eq = EQController()
+        self.playbackStore = JSONFileStore(filename: "playback_state.json")
         super.init()
         nowPlaying = NowPlayingService(player: self, urlSession: session)
         avPlayerPath = AVPlayerPath(player: self)
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleInterruption(_:)),
-            name: AVAudioSession.interruptionNotification, object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleRouteChange(_:)),
-            name: AVAudioSession.routeChangeNotification, object: nil
-        )
+        commonInit()
     }
 
     /// Designated initialiser for tests and alternative configurations.
-    init(urlSession: URLSessionProtocol, eq: EQController = EQController()) {
+    /// `playbackStore` defaults to an in-memory store so tests are isolated from
+    /// the real Documents directory; the live app injects a file-backed store.
+    init(
+        urlSession: URLSessionProtocol,
+        eq: EQController = EQController(),
+        playbackStore: KeyValueStore = InMemoryKeyValueStore()
+    ) {
         self.urlSession = urlSession
         self.prefetcher = StreamPrefetcher(resolver: StreamResolver(session: urlSession))
         self.radioService = RadioService(session: urlSession)
         self.eq = eq
+        self.playbackStore = playbackStore
         super.init()
         let session = urlSession
         nowPlaying = NowPlayingService(player: self, urlSession: session)
         avPlayerPath = AVPlayerPath(player: self)
+        commonInit()
+    }
+
+    /// Shared init tail: registers audio-session observers, wires the debounced
+    /// playback-state saver, then restores any persisted session.
+    private func commonInit() {
+        playbackSaveDebouncer = Debouncer(delay: 0.5) { [weak self] in self?.performSavePlayback() }
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleInterruption(_:)),
@@ -181,6 +221,8 @@ final class PlayerManager: NSObject, ObservableObject {
             self, selector: #selector(handleRouteChange(_:)),
             name: AVAudioSession.routeChangeNotification, object: nil
         )
+
+        restorePlaybackState()
     }
 
     private static func defaultURLSession() -> URLSessionProtocol {
@@ -197,6 +239,7 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     deinit {
+        playbackSaveDebouncer?.flush()
         NotificationCenter.default.removeObserver(self)
         let c = MPRemoteCommandCenter.shared()
         c.playCommand.removeTarget(nil)
@@ -312,6 +355,7 @@ final class PlayerManager: NSObject, ObservableObject {
         currentTime = 0
         duration = 0
         stopAllPlayback()
+        applyPendingResume()
         nowPlaying.updateNowPlaying()
         nowPlaying.loadArtwork(for: track)
         fetchStreamURL(for: track.id, generation: gen)
@@ -344,6 +388,7 @@ final class PlayerManager: NSObject, ObservableObject {
         currentTime = 0
         duration = 0
         stopAllPlayback()
+        applyPendingResume()
         nowPlaying.updateNowPlaying()
         if let artworkURL = track.thumbnailURL {
             nowPlaying.loadArtwork(from: artworkURL)
@@ -355,11 +400,19 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     func togglePlayPause() {
-        guard currentTrack != nil else { return }
+        guard let track = currentTrack else { return }
 
         if isPlaying {
             pause()
         } else {
+            // Cold-restored session: the track + position were rehydrated from
+            // disk but no AVPlayer item is loaded yet. Start the track fresh,
+            // seeking to the restored position so it resumes where it left off.
+            if avPlayerPath.avPlayer == nil {
+                pendingResumePosition = currentTime > 0 ? currentTime : nil
+                play(track)
+                return
+            }
             nowPlaying.activateAudioSession()
             if playbackState == .ended { avPlayerPath.replayCurrent() }
             avPlayerPath.play()
@@ -373,12 +426,14 @@ final class PlayerManager: NSObject, ObservableObject {
         isPlaying = false
         playbackState = .paused
         avPlayerPath.pause()
+        schedulePlaybackSave()
     }
 
     func seek(to time: TimeInterval) {
         avPlayerPath.seek(to: time)
         currentTime = time
         nowPlaying.updateNowPlaying()
+        schedulePlaybackSave()
     }
 
     func applyEQPreset(_ gains: [Float]) {
@@ -810,5 +865,63 @@ final class PlayerManager: NSObject, ObservableObject {
         seekTarget = nil
         avPlayerPath.stop()
         avPlayerPath.pendingSeek = nil
+    }
+
+    /// Promote a queued resume position into `seekTarget` after `stopAllPlayback`
+    /// has cleared it, so the next item created by the play path seeks there.
+    private func applyPendingResume() {
+        if let resume = pendingResumePosition {
+            seekTarget = resume
+            pendingResumePosition = nil
+        }
+    }
+
+    // MARK: - Playback-state persistence
+
+    /// Coalesce frequent state changes (track switches, radio refills, seeks)
+    /// into one debounced disk write. No-op during restore.
+    private func schedulePlaybackSave() {
+        guard !isRestoringPlayback else { return }
+        playbackSaveDebouncer?.call()
+    }
+
+    private func performSavePlayback() {
+        let snapshot = PersistedPlayback(
+            schemaVersion: Self.playbackSchemaVersion,
+            currentTrack: currentTrack,
+            queue: queue,
+            positionSeconds: currentTime,
+            durationSeconds: duration
+        )
+        guard let data = try? SchemaStore.encodeValue(snapshot) else { return }
+        try? playbackStore.save(data)
+    }
+
+    /// Force any pending debounced playback-state save to flush immediately.
+    /// Called from scenePhase background/inactive and `willTerminate` so the
+    /// session is durable before the app is suspended or killed.
+    func flushPendingWrites() {
+        playbackSaveDebouncer?.flush()
+    }
+
+    /// Rehydrate the last session into a *paused* state on launch. Does not
+    /// touch the audio session or load an AVPlayer item — the first user play
+    /// (see `togglePlayPause`) resumes from `seekTarget`.
+    private func restorePlaybackState() {
+        guard let snapshot = SchemaStore.loadValue(PersistedPlayback.self, from: playbackStore),
+              !snapshot.isEmpty else { return }
+        isRestoringPlayback = true
+        defer { isRestoringPlayback = false }
+
+        queue = snapshot.queue
+        if let track = snapshot.currentTrack {
+            currentTrack = track
+            currentArtworkURL = track.thumbnailURL
+            currentTime = snapshot.positionSeconds
+            duration = snapshot.durationSeconds
+            seekTarget = snapshot.positionSeconds > 0 ? snapshot.positionSeconds : nil
+            isPlaying = false
+            playbackState = .paused
+        }
     }
 }
