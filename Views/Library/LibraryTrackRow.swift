@@ -57,6 +57,11 @@ struct LibraryTrackRow: View {
         }
         .buttonStyle(.plain)
         .opacity(track.isMissing ? 0.55 : 1.0)
+        .trackRowAccessibility(
+            title: track.isMissing ? "\(track.title), missing file" : track.title,
+            artist: track.artist ?? "Unknown artist",
+            isCurrent: isCurrentTrack, isPlaying: isPlaying
+        )
     }
 
     @ViewBuilder

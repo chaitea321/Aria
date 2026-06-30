@@ -14,6 +14,19 @@ struct ContentView: View {
     @State private var showFullPlayer = false
     @State private var errorBanner: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Show/hide the full-screen player, skipping the slide spring when Reduce
+    /// Motion is on (the view still cross-fades via its transition).
+    private func setFullPlayer(_ shown: Bool) {
+        if reduceMotion {
+            showFullPlayer = shown
+        } else {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                showFullPlayer = shown
+            }
+        }
+    }
 
     init(initialTab: AppTab = .favorites) {
         _selectedTab = State(initialValue: initialTab)
@@ -30,9 +43,7 @@ struct ContentView: View {
 
                 if playerManager.currentTrack != nil {
                     MiniPlayerView {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                            showFullPlayer = true
-                        }
+                        setFullPlayer(true)
                     }
                 }
 
@@ -40,12 +51,8 @@ struct ContentView: View {
             }
 
             if showFullPlayer {
-                FullScreenPlayerView(onDismiss: {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                        showFullPlayer = false
-                    }
-                })
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                FullScreenPlayerView(onDismiss: { setFullPlayer(false) })
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 .zIndex(100)
             }
         }

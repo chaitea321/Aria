@@ -231,6 +231,11 @@ struct PlaylistDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .addToQueueGesture(playerManager: playerManager, track: track)
+                .trackRowAccessibility(
+                    title: track.title, artist: track.artist,
+                    isCurrent: playerManager.currentTrack?.id == track.id,
+                    isPlaying: playerManager.isPlaying
+                )
                 .listRowBackground(tokens.background)
                 .listRowSeparatorTint(tokens.hairline)
                 .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.lg, bottom: 4, trailing: DS.Spacing.lg))
