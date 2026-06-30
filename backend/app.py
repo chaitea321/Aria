@@ -264,6 +264,13 @@ _total_cache_bytes = 0
 
 _search_cache: dict[str, tuple[list[dict], float]] = {}
 _SEARCH_CACHE_TTL: float = float(os.environ.get("SEARCH_CACHE_TTL", "60"))
+# Pagination bounds. yt-dlp has no native offset, so a page is served by
+# fetching ytsearch{offset+limit} and slicing the tail; cap the total fetch so
+# a deep page can't trigger an unbounded extraction. Query length is capped to
+# keep a pathological q from blowing up the ytsearch call / cache key.
+SEARCH_PAGE_MAX = int(os.environ.get("SEARCH_PAGE_MAX", "50"))
+SEARCH_FETCH_MAX = int(os.environ.get("SEARCH_FETCH_MAX", "100"))
+MAX_QUERY_LEN = int(os.environ.get("MAX_QUERY_LEN", "200"))
 
 # Per-key request log for rate limiting. Keyed by "<endpoint>:<client-ip>".
 _request_log: dict[str, deque[float]] = defaultdict(deque)
@@ -482,8 +489,9 @@ def _download_with_retry(video_id: str, max_attempts: int = 3) -> None:
         raise last_exc
 
 
-def _search_sync(query: str) -> list[dict]:
-    """Search YouTube via yt-dlp (runs in executor)."""
+def _search_sync(query: str, count: int = 25) -> list[dict]:
+    """Search YouTube via yt-dlp (runs in executor). `count` is the number of
+    results to fetch (ytsearch{count}); the caller slices the page it wants."""
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -494,7 +502,7 @@ def _search_sync(query: str) -> list[dict]:
     if runtimes:
         ydl_opts["js_runtimes"] = runtimes
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(f"ytsearch25:{query}", download=False)
+        result = ydl.extract_info(f"ytsearch{count}:{query}", download=False)
 
     entries = result.get("entries") or []
     return [
@@ -845,34 +853,43 @@ async def stream(file_name: str):
 async def search(
     request: Request,
     q: str = Query(..., description="Search query"),
+    limit: int = Query(25, ge=1, le=SEARCH_PAGE_MAX, description="Results per page"),
+    offset: int = Query(0, ge=0, description="Number of leading results to skip"),
     _auth: None = Depends(_require_api_key),
 ):
     """
     Search YouTube for music. Returns list of {id, title, artist, thumbnail, duration}.
-    Uses yt-dlp search with a 60-second in-memory cache — no API key needed.
+    Paginated via `limit`/`offset`; uses yt-dlp search with a short in-memory
+    cache keyed by (query, fetch depth) — no API key needed.
     """
     _enforce_rate_limit(request, "search", RATE_LIMIT_SEARCH_PER_MIN)
-    query = q.strip()
+    query = q.strip()[:MAX_QUERY_LEN]
     if not query:
         return []
 
+    # yt-dlp has no offset, so fetch offset+limit and slice. Bound the fetch so
+    # a deep page can't request an unbounded extraction; past the cap there are
+    # simply no more results.
+    if offset >= SEARCH_FETCH_MAX:
+        return []
+    fetch_count = min(offset + limit, SEARCH_FETCH_MAX)
+    cache_key = f"{query}\x00{fetch_count}"
+
     now = time.time()
-    if query in _search_cache:
-        results, cached_at = _search_cache[query]
-        if now - cached_at < _SEARCH_CACHE_TTL:
-            return results
-        del _search_cache[query]
+    cached = _search_cache.get(cache_key)
+    if cached and now - cached[1] < _SEARCH_CACHE_TTL:
+        return cached[0][offset:offset + limit]
 
     try:
         async with _ytdl_search_semaphore:
             loop = asyncio.get_running_loop()
-            results = await loop.run_in_executor(None, _search_sync, query)
+            results = await loop.run_in_executor(None, _search_sync, query, fetch_count)
     except Exception as e:
         logger.error("Search failed for %r: %s", query, e)
         raise HTTPException(status_code=502, detail=f"Search failed: {str(e)}")
 
-    _search_cache[query] = (results, time.time())
-    return results
+    _search_cache[cache_key] = (results, time.time())
+    return results[offset:offset + limit]
 
 
 @app.get("/api/resolve")

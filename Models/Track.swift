@@ -15,6 +15,10 @@ struct Track: Identifiable, Codable, Hashable {
     /// `play(localTrack:fileURL:)` so callers can skip these tracks
     /// instead of triggering a 1-by-1 playback error.
     var isMissing: Bool
+    /// Track length in seconds when known (from search results or local-file
+    /// metadata). Optional so legacy persisted tracks decode to `nil` without a
+    /// schema migration; surfaced in lists/rows.
+    var duration: Double?
 
     init(
         id: String,
@@ -22,7 +26,8 @@ struct Track: Identifiable, Codable, Hashable {
         artist: String,
         thumbnailURL: URL? = nil,
         localFileURL: URL? = nil,
-        isMissing: Bool = false
+        isMissing: Bool = false,
+        duration: Double? = nil
     ) {
         self.id = id
         self.title = title
@@ -30,10 +35,11 @@ struct Track: Identifiable, Codable, Hashable {
         self.thumbnailURL = thumbnailURL
         self.localFileURL = localFileURL
         self.isMissing = isMissing
+        self.duration = duration
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, artist, thumbnailURL, localFileURL, isMissing
+        case id, title, artist, thumbnailURL, localFileURL, isMissing, duration
     }
 
     init(from decoder: Decoder) throws {
@@ -44,6 +50,7 @@ struct Track: Identifiable, Codable, Hashable {
         self.thumbnailURL = try c.decodeIfPresent(URL.self, forKey: .thumbnailURL)
         self.localFileURL = try c.decodeIfPresent(URL.self, forKey: .localFileURL)
         self.isMissing = try c.decodeIfPresent(Bool.self, forKey: .isMissing) ?? false
+        self.duration = try c.decodeIfPresent(Double.self, forKey: .duration)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -54,6 +61,7 @@ struct Track: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(thumbnailURL, forKey: .thumbnailURL)
         try c.encodeIfPresent(localFileURL, forKey: .localFileURL)
         try c.encode(isMissing, forKey: .isMissing)
+        try c.encodeIfPresent(duration, forKey: .duration)
     }
 
     var isLocal: Bool { localFileURL != nil }

@@ -39,13 +39,17 @@ final class YouTubeSearchService {
         currentTask = nil
     }
 
-    func search(query: String) async throws -> [Track] {
+    func search(query: String, limit: Int = 25, offset: Int = 0) async throws -> [Track] {
         cancel()
 
         guard var components = URLComponents(string: "\(backendURL)/api/search") else {
             throw URLError(.badURL)
         }
-        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
 
         guard let url = components.url else {
             throw URLError(.badURL)
@@ -70,6 +74,7 @@ final class YouTubeSearchService {
                 let title: String
                 let artist: String
                 let thumbnail: URL?
+                let duration: Double?
             }
 
             let results: [SearchResult]
@@ -84,7 +89,9 @@ final class YouTubeSearchService {
                     id: item.id,
                     title: item.title,
                     artist: item.artist,
-                    thumbnailURL: item.thumbnail
+                    thumbnailURL: item.thumbnail,
+                    // Backend returns 0 for unknown duration; treat that as nil.
+                    duration: (item.duration ?? 0) > 0 ? item.duration : nil
                 )
             }
         }

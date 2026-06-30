@@ -34,3 +34,21 @@ final class YouTubeSearchServiceTests: XCTestCase {
         }
     }
 }
+
+/// Locks the optional `Track.duration` added for search results: it must
+/// round-trip through Codable, and legacy persisted tracks that predate the
+/// field must decode to `nil` (no schema migration required).
+final class TrackDurationCodableTests: XCTestCase {
+    func test_durationRoundTrips() throws {
+        let track = Track(id: "a", title: "T", artist: "A", duration: 215)
+        let data = try JSONEncoder().encode(track)
+        let back = try JSONDecoder().decode(Track.self, from: data)
+        XCTAssertEqual(back.duration, 215)
+    }
+
+    func test_legacyJSONWithoutDurationDecodesToNil() throws {
+        let legacy = #"{"id":"a","title":"T","artist":"A","isMissing":false}"#.data(using: .utf8)!
+        let back = try JSONDecoder().decode(Track.self, from: legacy)
+        XCTAssertNil(back.duration)
+    }
+}

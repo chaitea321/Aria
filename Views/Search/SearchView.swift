@@ -11,6 +11,13 @@ struct SearchView: View {
     @State private var results: Loadable<[Track]> = .idle
     @FocusState private var isSearchFocused: Bool
 
+    // Pagination state for infinite scroll.
+    @State private var activeQuery = ""
+    @State private var nextOffset = 0
+    @State private var canLoadMore = false
+    @State private var isLoadingMore = false
+    private let pageSize = 25
+
     private let searchService: YouTubeSearchService
     private var tokens: DesignTokens { themeManager.tokens }
 
@@ -261,6 +268,14 @@ struct SearchView: View {
                             }
 
                             Spacer(minLength: 0)
+
+                            if let secs = track.duration {
+                                Text(formatDuration(secs))
+                                    .font(DS.Typography.caption)
+                                    .monospacedDigit()
+                                    .foregroundColor(tokens.textSecondary)
+                                    .accessibilityHidden(true)
+                            }
                         }
                         .padding(.vertical, 2)
                         .contentShape(Rectangle())
@@ -275,6 +290,23 @@ struct SearchView: View {
                     .listRowBackground(tokens.background)
                     .listRowSeparatorTint(tokens.hairline)
                     .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.md, bottom: 4, trailing: DS.Spacing.md))
+                    .onAppear {
+                        // Infinite scroll: when the last row appears, pull the
+                        // next page.
+                        if track.id == tracks.last?.id {
+                            Task { await loadMore() }
+                        }
+                    }
+                }
+
+                if isLoadingMore {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
             }
         }
@@ -400,6 +432,8 @@ struct SearchView: View {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 3 else {
             results = .idle
+            canLoadMore = false
+            nextOffset = 0
             return
         }
 
@@ -417,14 +451,44 @@ struct SearchView: View {
         results = .loading
 
         do {
-            let tracks = try await searchService.search(query: trimmed)
+            let tracks = try await searchService.search(query: trimmed, limit: pageSize, offset: 0)
             try Task.checkCancellation()
             results = .loaded(tracks)
+            activeQuery = trimmed
+            nextOffset = tracks.count
+            canLoadMore = tracks.count >= pageSize
             settingsManager.addSearchToHistory(trimmed)
         } catch is CancellationError {
             // Superseded by a newer query; do not flip the state.
         } catch {
             results = .failed(error)
         }
+    }
+
+    /// Appends the next page when the user scrolls to the bottom. No-ops if the
+    /// last page was short (end reached), one is already in flight, or the query
+    /// changed mid-flight.
+    private func loadMore() async {
+        guard canLoadMore, !isLoadingMore, results.value != nil else { return }
+        let q = activeQuery
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let more = try await searchService.search(query: q, limit: pageSize, offset: nextOffset)
+            guard q == activeQuery, let current = results.value else { return }
+            let existing = Set(current.map(\.id))
+            let fresh = more.filter { !existing.contains($0.id) }
+            if !fresh.isEmpty { results = .loaded(current + fresh) }
+            nextOffset += more.count
+            canLoadMore = more.count >= pageSize
+        } catch {
+            // Stop paginating on error but keep the results already shown.
+            canLoadMore = false
+        }
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }

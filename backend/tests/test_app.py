@@ -45,17 +45,58 @@ def test_valid_video_id_passes_validation(client, monkeypatch):
 
 def test_search_rate_limit_returns_429(client, monkeypatch):
     monkeypatch.setattr(appmod, "RATE_LIMIT_SEARCH_PER_MIN", 3)
-    monkeypatch.setattr(appmod, "_search_sync", lambda q: [])
+    monkeypatch.setattr(appmod, "_search_sync", lambda q, count=25: [])
     for _ in range(3):
         assert client.get("/api/search", params={"q": "hello"}).status_code == 200
     assert client.get("/api/search", params={"q": "hello"}).status_code == 429
+
+
+def _fake_search(query, count=25):
+    return [
+        {"id": f"id{i}", "title": f"t{i}", "artist": "a",
+         "thumbnail": "x", "duration": i}
+        for i in range(count)
+    ]
+
+
+def test_search_pagination_slices_by_offset(client, monkeypatch):
+    monkeypatch.setattr(appmod, "_search_sync", _fake_search)
+    page1 = client.get("/api/search", params={"q": "x", "limit": 10, "offset": 0}).json()
+    assert [r["id"] for r in page1] == [f"id{i}" for i in range(10)]
+    page2 = client.get("/api/search", params={"q": "x", "limit": 10, "offset": 10}).json()
+    assert [r["id"] for r in page2] == [f"id{i}" for i in range(10, 20)]
+
+
+def test_search_offset_past_fetch_cap_is_empty(client, monkeypatch):
+    monkeypatch.setattr(appmod, "_search_sync", _fake_search)
+    monkeypatch.setattr(appmod, "SEARCH_FETCH_MAX", 100)
+    assert client.get("/api/search", params={"q": "x", "offset": 100}).json() == []
+
+
+def test_search_query_length_capped(client, monkeypatch):
+    seen = {}
+
+    def fake(query, count=25):
+        seen["q"] = query
+        return []
+
+    monkeypatch.setattr(appmod, "_search_sync", fake)
+    monkeypatch.setattr(appmod, "MAX_QUERY_LEN", 10)
+    client.get("/api/search", params={"q": "z" * 50})
+    assert len(seen["q"]) == 10
+
+
+def test_search_returns_duration(client, monkeypatch):
+    monkeypatch.setattr(appmod, "_search_sync", _fake_search)
+    r = client.get("/api/search", params={"q": "x", "limit": 3, "offset": 0}).json()
+    assert r[2]["duration"] == 2
 
 
 def test_rate_limit_is_per_ip(client, monkeypatch):
     # Behind one trusted proxy, X-Forwarded-For is honoured as the client IP.
     monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 1)
     monkeypatch.setattr(appmod, "RATE_LIMIT_SEARCH_PER_MIN", 1)
-    monkeypatch.setattr(appmod, "_search_sync", lambda q: [])
+    monkeypatch.setattr(appmod, "_search_sync", lambda q, count=25: [])
     assert client.get("/api/search", params={"q": "a"}, headers={"X-Forwarded-For": "1.1.1.1"}).status_code == 200
     # different IP is unaffected
     assert client.get("/api/search", params={"q": "a"}, headers={"X-Forwarded-For": "2.2.2.2"}).status_code == 200
@@ -68,7 +109,7 @@ def test_xff_ignored_without_trusted_proxy(client, monkeypatch):
     fresh rate-limit identity — every request collapses onto the socket peer."""
     monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 0)
     monkeypatch.setattr(appmod, "RATE_LIMIT_SEARCH_PER_MIN", 1)
-    monkeypatch.setattr(appmod, "_search_sync", lambda q: [])
+    monkeypatch.setattr(appmod, "_search_sync", lambda q, count=25: [])
     assert client.get("/api/search", params={"q": "a"}, headers={"X-Forwarded-For": "1.1.1.1"}).status_code == 200
     # A rotating spoofed XFF does NOT escape the limit — same real peer.
     assert client.get("/api/search", params={"q": "a"}, headers={"X-Forwarded-For": "9.9.9.9"}).status_code == 429
@@ -317,7 +358,7 @@ def test_percentile_nearest_rank():
 
 
 def test_metrics_endpoint_tracks_requests(client, monkeypatch):
-    monkeypatch.setattr(appmod, "_search_sync", lambda q: [])
+    monkeypatch.setattr(appmod, "_search_sync", lambda q, count=25: [])
     client.get("/api/search", params={"q": "abc"})
     m = client.get("/api/metrics").json()
     assert m["total_requests"] >= 1
