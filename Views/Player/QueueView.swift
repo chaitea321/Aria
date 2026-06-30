@@ -3,7 +3,11 @@ import SwiftUI
 struct QueueView: View {
     @EnvironmentObject private var playerManager: PlayerManager
     @EnvironmentObject private var themeManager: ThemeManager
+    @EnvironmentObject private var playlistsManager: PlaylistsManager
     @Environment(\.dismiss) private var dismiss
+
+    @State private var showSaveDialog = false
+    @State private var newPlaylistName = ""
 
     private var tokens: DesignTokens { themeManager.tokens }
 
@@ -32,16 +36,47 @@ struct QueueView: View {
                         .foregroundColor(tokens.accent)
                 }
                 if !playerManager.queue.isEmpty {
-                    ToolbarItem(placement: .destructiveAction) {
-                        Button("Clear") {
-                            Haptics.warning()
-                            playerManager.clearQueue()
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        EditButton()
+                            .foregroundColor(tokens.accent)
+                        Menu {
+                            Button {
+                                newPlaylistName = ""
+                                showSaveDialog = true
+                            } label: {
+                                Label("Save as Playlist", systemImage: "square.and.arrow.down")
+                            }
+                            Button(role: .destructive) {
+                                Haptics.warning()
+                                playerManager.clearQueue()
+                            } label: {
+                                Label("Clear Queue", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .foregroundColor(tokens.accent)
                         }
-                        .foregroundColor(tokens.accent)
                     }
                 }
             }
+            .alert("Save as Playlist", isPresented: $showSaveDialog) {
+                TextField("Playlist name", text: $newPlaylistName)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") { saveQueueAsPlaylist() }
+            } message: {
+                Text("Saves the current track and everything up next.")
+            }
         }
+    }
+
+    /// Snapshot the current track + up-next queue into a new playlist.
+    private func saveQueueAsPlaylist() {
+        let tracks = ([playerManager.currentTrack].compactMap { $0 }) + playerManager.queue
+        guard !tracks.isEmpty else { return }
+        let trimmed = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "New Playlist" : trimmed
+        playlistsManager.create(name: name, tracks: tracks)
+        Haptics.success()
     }
 
     private var emptyState: some View {
@@ -129,6 +164,9 @@ struct QueueView: View {
                 for idx in offsets.sorted(by: >) {
                     playerManager.removeFromQueue(at: idx)
                 }
+            }
+            .onMove { offsets, destination in
+                playerManager.moveInQueue(from: offsets, to: destination)
             }
 
             Section {

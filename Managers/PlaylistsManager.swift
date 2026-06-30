@@ -40,8 +40,27 @@ final class PlaylistsManager: ObservableObject {
         return playlist
     }
 
+    /// Create a playlist pre-populated with `tracks`, preserving order and
+    /// dropping duplicate ids. Used by "Save Queue as Playlist".
+    @discardableResult
+    func create(name: String, tracks: [Track]) -> Playlist {
+        var seen = Set<String>()
+        let unique = tracks.filter { seen.insert($0.id).inserted }
+        let playlist = Playlist(name: name, tracks: unique)
+        playlists.append(playlist)
+        save()
+        return playlist
+    }
+
     func delete(_ playlist: Playlist) {
         playlists.removeAll { $0.id == playlist.id }
+        save()
+    }
+
+    /// Reorder tracks within a playlist (drag-to-reorder from the detail view).
+    func moveTrack(in playlist: Playlist, from offsets: IndexSet, to destination: Int) {
+        guard let idx = playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        playlists[idx].tracks.moveElements(fromOffsets: offsets, toOffset: destination)
         save()
     }
 

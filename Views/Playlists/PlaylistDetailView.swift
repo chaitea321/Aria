@@ -36,7 +36,11 @@ struct PlaylistDetailView: View {
             .navigationTitle(currentPlaylist.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if !currentPlaylist.tracks.isEmpty {
+                        EditButton()
+                            .foregroundColor(tokens.textPrimary)
+                    }
                     Menu {
                         Button {
                             renameText = currentPlaylist.name
@@ -244,6 +248,9 @@ struct PlaylistDetailView: View {
                 for idx in offsets.sorted(by: >) {
                     playlistsManager.removeTrack(currentPlaylist.tracks[idx], from: currentPlaylist)
                 }
+            }
+            .onMove { offsets, destination in
+                playlistsManager.moveTrack(in: currentPlaylist, from: offsets, to: destination)
             }
         }
         .listStyle(.plain)

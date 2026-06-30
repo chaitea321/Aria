@@ -685,6 +685,14 @@ final class PlayerManager: NSObject, ObservableObject {
         unshuffledQueue?.removeAll { $0.id == removed.id }
     }
 
+    /// Reorder the up-next queue (drag-to-reorder from `QueueView`). Operates on
+    /// the live queue; the `unshuffledQueue` snapshot (the order restored when
+    /// shuffle is turned off) is intentionally left as the original pre-shuffle
+    /// order — a manual reorder changes "up next", not the saved baseline.
+    func moveInQueue(from offsets: IndexSet, to destination: Int) {
+        queue.moveElements(fromOffsets: offsets, toOffset: destination)
+    }
+
     func clearQueue() {
         queue.removeAll()
         unshuffledQueue = nil

@@ -73,6 +73,26 @@ final class PlaylistsManagerTests: XCTestCase {
         XCTAssertEqual(manager.recentlyPlayedPlaylists.map(\.name), ["A"])
     }
 
+    func testCreateWithTracksPreservesOrderAndDedupes() {
+        let tracks = [
+            makeTrack(id: "1", title: "A"),
+            makeTrack(id: "2", title: "B"),
+            makeTrack(id: "1", title: "A"),
+        ]
+        let p = manager.create(name: "Saved Queue", tracks: tracks)
+        XCTAssertEqual(p.tracks.map(\.id), ["1", "2"])
+        XCTAssertEqual(manager.playlists.first?.tracks.count, 2)
+    }
+
+    func testMoveTrackReorders() {
+        let p = manager.create(name: "P")
+        manager.addTrack(makeTrack(id: "1", title: "A"), to: p)
+        manager.addTrack(makeTrack(id: "2", title: "B"), to: p)
+        manager.addTrack(makeTrack(id: "3", title: "C"), to: p)
+        manager.moveTrack(in: p, from: IndexSet(integer: 0), to: 3)
+        XCTAssertEqual(manager.playlists.first?.tracks.map(\.id), ["2", "3", "1"])
+    }
+
     // MARK: - Helpers
 
     private func makeTrack(id: String, title: String) -> Track {
