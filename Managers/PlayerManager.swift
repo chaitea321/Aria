@@ -78,22 +78,21 @@ final class PlayerManager: NSObject, ObservableObject {
     // MARK: - Configuration
 
     static let backendURL: String = {
-        if let url = Bundle.main.object(forInfoDictionaryKey: "ARIA_BACKEND_URL") as? String {
+        if let url = Bundle.main.object(forInfoDictionaryKey: "ARIA_BACKEND_URL") as? String,
+           !url.isEmpty {
             return url
         }
+        // There is no public backend right now — the only deployment is the
+        // homelab, reached as phone → Tailscale mesh → Linux laptop over plain
+        // HTTP (WireGuard already encrypts the tunnel; a device-trusted CA for
+        // a dev backend is impractical). Both Debug and Release fall back to it,
+        // resolved from `ARIA_HOMELAB_HOST` in Info.plist, with the matching ATS
+        // exception in Aria---Music-Browser-Info.plist. The public source ships
+        // the RFC 5737 TEST-NET-1 placeholder so no real IP leaks. To point at a
+        // real HTTPS backend (e.g. TestFlight/App Store, where Tailscale isn't
+        // present), set `ARIA_BACKEND_URL` in Info.plist — it overrides this.
         let host = Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
-        #if DEBUG
-        // Homelab over Tailscale — WireGuard already encrypts the tunnel,
-        // so plain HTTP is fine for local dev. HTTPS was attempted but
-        // requires a system-trusted CA on the device, which is impractical
-        // to install on a real iPhone for a dev-only backend. The host
-        // resolves from `ARIA_HOMELAB_HOST` in Info.plist; the public
-        // source ships the RFC 5737 TEST-NET-1 placeholder so the IP
-        // doesn't leak. See the README's "Dev homelab setup" section.
         return "http://\(host):8000"
-        #else
-        return "https://aria-backend-px9s.onrender.com"
-        #endif
     }()
 
     static let eqFrequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
