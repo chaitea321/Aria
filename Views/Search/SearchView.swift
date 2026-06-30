@@ -456,7 +456,10 @@ struct SearchView: View {
             results = .loaded(tracks)
             activeQuery = trimmed
             nextOffset = tracks.count
-            canLoadMore = tracks.count >= pageSize
+            // yt-dlp often returns slightly fewer than `pageSize`, so don't gate
+            // on an exact count — try another page whenever the first one was
+            // non-empty. loadMore() stops as soon as a page brings nothing new.
+            canLoadMore = !tracks.isEmpty
             settingsManager.addSearchToHistory(trimmed)
         } catch is CancellationError {
             // Superseded by a newer query; do not flip the state.
@@ -480,7 +483,10 @@ struct SearchView: View {
             let fresh = more.filter { !existing.contains($0.id) }
             if !fresh.isEmpty { results = .loaded(current + fresh) }
             nextOffset += more.count
-            canLoadMore = more.count >= pageSize
+            // Stop when the backend returns nothing OR nothing new (the latter
+            // also cleanly ends pagination against a backend that ignores
+            // `offset` and keeps re-returning the same page).
+            canLoadMore = !fresh.isEmpty
         } catch {
             // Stop paginating on error but keep the results already shown.
             canLoadMore = false
