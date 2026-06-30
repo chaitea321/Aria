@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Aria yt-dlp self-update daily
+
+[Timer]
+# Daily at 04:17 local, with catch-up if the box was off and jitter to avoid
+# hammering PyPI on the dot.
+OnCalendar=*-*-* 04:17:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

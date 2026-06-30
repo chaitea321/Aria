@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes (a small but real
+# cost-control measure — macOS runners are billed at 10x linux).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (py_compile + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r backend/requirements-dev.txt
+      - name: Byte-compile
+        run: python -m py_compile backend/app.py
+      - name: Run tests
+        working-directory: backend
+        run: python -m pytest tests/ -q
+
+  ios:
+    name: iOS (xcodebuild test)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # The project targets Xcode 26.5+. GitHub-hosted runners may lag that
+      # release; pick the newest Xcode the image actually has. If the image is
+      # too old for the project, bump the runner label (e.g. macos-26) once
+      # available, or adjust the simulator name/OS below to match `simctl list`.
+      - name: Select newest available Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          echo "Using ${latest:-default Xcode}"
+          [ -n "$latest" ] && sudo xcode-select -s "$latest" || true
+          xcodebuild -version
+      - name: List iPhone simulators
+        run: xcrun simctl list devices available | grep -i iphone || true
+      - name: Run AriaTests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme AriaTests \
+            -project Aria.xcodeproj \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO

@@ -1,0 +1,15 @@
+# Aria backend runtime dependencies.
+#
+# fastapi / uvicorn are pinned exactly — they are stable and we want
+# reproducible deploys (the whole point of the LLMOps track).
+#
+# yt-dlp is pinned to a FLOOR, not an exact version, on purpose: YouTube breaks
+# extraction frequently, so yt-dlp ships fixes almost daily. An exact pin would
+# rot within days and a `pip install -r requirements.txt` redeploy would
+# *downgrade* a freshly auto-updated yt-dlp back to a broken version. The floor
+# guarantees a known-good baseline; the scheduled updater (update-yt-dlp.sh +
+# aria-yt-dlp-update.timer) keeps it ahead of the floor. /api/health reports the
+# version actually running so drift is observable.
+fastapi==0.138.0
+uvicorn[standard]==0.49.0
+yt-dlp>=2026.6.9
