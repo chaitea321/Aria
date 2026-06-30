@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import Aria___Music_Browser
 
 @MainActor
@@ -512,6 +513,131 @@ final class LocalLibraryManagerTests: XCTestCase {
         }
         XCTAssertTrue(cloudManager.tracks.isEmpty,
                       "no track should be added when the file is an un-downloaded cloud file")
+    }
+
+    // MARK: - Artwork extraction (local-artwork finding)
+
+    /// A synthetic stand-in for `AVURLAsset` conforming to
+    /// `MetadataLoading`, so `LocalLibraryManager.loadArtworkData` can be
+    /// exercised with hand-built `AVMetadataItem`s instead of real audio
+    /// fixtures.
+    private struct StaticMetadataAsset: MetadataLoading {
+        var allMetadata: [AVMetadataItem] = []
+        var commonMetadata: [AVMetadataItem] = []
+        var formatItems: [AVMetadataFormat: [AVMetadataItem]] = [:]
+
+        func loadAllMetadataItems() async throws -> [AVMetadataItem] { allMetadata }
+        func loadCommonMetadataItems() async throws -> [AVMetadataItem] { commonMetadata }
+        func loadAvailableMetadataFormats() async throws -> [AVMetadataFormat] { Array(formatItems.keys) }
+        func loadMetadataItems(for format: AVMetadataFormat) async throws -> [AVMetadataItem] {
+            formatItems[format] ?? []
+        }
+    }
+
+    /// Builds a synthetic `AVMutableMetadataItem` with the given
+    /// identifier/commonKey/key and raw `Data` payload, for exercising
+    /// `LocalLibraryManager.loadArtworkData` without needing a real audio
+    /// fixture.
+    private func makeArtworkItem(
+        identifier: AVMetadataIdentifier? = nil,
+        key: String? = nil,
+        data: Data
+    ) -> AVMetadataItem {
+        let item = AVMutableMetadataItem()
+        item.identifier = identifier
+        if let key {
+            item.keySpace = .id3
+            item.key = key as NSString
+        }
+        // `dataValue` and `commonKey` have no setters (even on the mutable
+        // subclass) -- `commonKey` is derived from `identifier`, and the
+        // async `load(.dataValue)` overlay derives its value from `value`,
+        // which is the settable property.
+        item.value = data as NSData
+        return item
+    }
+
+    private let jpegBytes = Data([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0x49, 0x46])
+    private let pngBytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+
+    func test_artworkFileExtension_jpeg() {
+        XCTAssertEqual(LocalLibraryManager.artworkFileExtension(for: jpegBytes), "jpg")
+    }
+
+    func test_artworkFileExtension_png() {
+        XCTAssertEqual(LocalLibraryManager.artworkFileExtension(for: pngBytes), "png")
+    }
+
+    func test_artworkFileExtension_gif() {
+        let gifBytes = Data([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+        XCTAssertEqual(LocalLibraryManager.artworkFileExtension(for: gifBytes), "gif")
+    }
+
+    func test_artworkFileExtension_unknownMagicBytes_fallsBackToImg() {
+        let randomBytes = Data([0x00, 0x01, 0x02, 0x03])
+        XCTAssertEqual(LocalLibraryManager.artworkFileExtension(for: randomBytes), "img")
+    }
+
+    func test_artworkFileExtension_emptyData_fallsBackToImg() {
+        XCTAssertEqual(LocalLibraryManager.artworkFileExtension(for: Data()), "img")
+    }
+
+    func test_loadArtworkData_commonIdentifierArtwork_isSelected() async {
+        let item = makeArtworkItem(identifier: .commonIdentifierArtwork, data: jpegBytes)
+        let asset = StaticMetadataAsset(allMetadata: [item])
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertEqual(data, jpegBytes)
+    }
+
+    func test_loadArtworkData_id3AttachedPictureIdentifier_isSelected() async {
+        // Simulates an MP3's ID3 APIC frame surfaced via its format-specific
+        // identifier rather than the common-artwork identifier — the gap
+        // the original extraction missed.
+        let item = makeArtworkItem(identifier: .id3MetadataAttachedPicture, data: jpegBytes)
+        let asset = StaticMetadataAsset(formatItems: [.id3Metadata: [item]])
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertEqual(data, jpegBytes)
+    }
+
+    func test_loadArtworkData_id3APICRawKey_isSelected() async {
+        // Some asset/format combinations surface the ID3 frame only via its
+        // raw key string ("APIC") rather than a typed `.identifier`.
+        let item = makeArtworkItem(key: "APIC", data: pngBytes)
+        let asset = StaticMetadataAsset(formatItems: [.id3Metadata: [item]])
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertEqual(data, pngBytes)
+    }
+
+    func test_loadArtworkData_iTunesCoverArt_isSelected() async {
+        let item = makeArtworkItem(identifier: .iTunesMetadataCoverArt, data: pngBytes)
+        let asset = StaticMetadataAsset(formatItems: [.iTunesMetadata: [item]])
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertEqual(data, pngBytes)
+    }
+
+    func test_loadArtworkData_legacyCommonMetadataFallback_isSelected() async {
+        // Artwork only present in `commonMetadata` (not in the combined
+        // `.metadata` set or any format-specific set) -- exercises the
+        // final legacy fallback path, which scans for
+        // `commonKey == "artwork"`. `commonKey` is derived automatically
+        // from the common-artwork identifier.
+        let item = makeArtworkItem(identifier: .commonIdentifierArtwork, data: jpegBytes)
+        let asset = StaticMetadataAsset(commonMetadata: [item])
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertEqual(data, jpegBytes)
+    }
+
+    func test_loadArtworkData_noArtworkAnywhere_returnsNil() async {
+        let asset = StaticMetadataAsset()
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertNil(data)
+    }
+
+    func test_loadArtworkData_emptyDataValue_treatedAsAbsent() async {
+        let item = makeArtworkItem(identifier: .commonIdentifierArtwork, data: Data())
+        let asset = StaticMetadataAsset(allMetadata: [item])
+        let data = await LocalLibraryManager.loadArtworkData(from: asset)
+        XCTAssertNil(data, "an artwork item with empty data should not be treated as present")
     }
 
     // MARK: - Metadata fallbacks (B4)

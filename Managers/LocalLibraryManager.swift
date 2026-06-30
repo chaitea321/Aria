@@ -5,6 +5,43 @@ import os.log
 
 private let log = Logger(subsystem: "com.aria.music", category: "LocalLibraryManager")
 
+/// The subset of `AVURLAsset`'s async metadata-loading surface that
+/// `LocalLibraryManager.loadArtworkData(from:)` needs, expressed as plain
+/// async functions (rather than `AVAsset`'s `load(_:)` key-path API) so
+/// tests can conform a synthetic double without needing real audio
+/// fixtures. `AVURLAsset` conforms via the adapter extension below.
+protocol MetadataLoading {
+    /// All metadata items for every identifier the asset exposes
+    /// (`AVAsset.load(.metadata)`).
+    func loadAllMetadataItems() async throws -> [AVMetadataItem]
+    /// The legacy common-metadata items (`AVAsset.load(.commonMetadata)`).
+    func loadCommonMetadataItems() async throws -> [AVMetadataItem]
+    /// The format-specific metadata containers the asset advertises
+    /// (`AVAsset.load(.availableMetadataFormats)`).
+    func loadAvailableMetadataFormats() async throws -> [AVMetadataFormat]
+    /// The metadata items for one specific format
+    /// (`AVAsset.loadMetadata(for:)`).
+    func loadMetadataItems(for format: AVMetadataFormat) async throws -> [AVMetadataItem]
+}
+
+extension AVURLAsset: MetadataLoading {
+    func loadAllMetadataItems() async throws -> [AVMetadataItem] {
+        try await load(.metadata)
+    }
+
+    func loadCommonMetadataItems() async throws -> [AVMetadataItem] {
+        try await load(.commonMetadata)
+    }
+
+    func loadAvailableMetadataFormats() async throws -> [AVMetadataFormat] {
+        try await load(.availableMetadataFormats)
+    }
+
+    func loadMetadataItems(for format: AVMetadataFormat) async throws -> [AVMetadataItem] {
+        try await loadMetadata(for: format)
+    }
+}
+
 /// Owns the on-disk "imported from Files" library. Tracks the metadata
 /// of every file the user has imported (UUID, title, file size,
 /// import date) and copies the actual audio files into a stable
@@ -348,19 +385,22 @@ final class LocalLibraryManager: ObservableObject {
         return 0
     }
 
-    /// Extracts embedded artwork (ID3 APIC for MP3, PICTURE for FLAC,
-    /// etc.) and writes it to `libraryDirectory/artwork/<uuid>.<ext>`.
-    /// Returns the file URL, or nil if the file has no artwork or the
-    /// extraction failed. Best-effort; a missing artwork file is not
-    /// considered an error.
+    /// Extracts embedded artwork and writes it to
+    /// `libraryDirectory/artwork/<uuid>.<ext>`. Returns the file URL, or
+    /// nil if the file has no artwork or the extraction failed.
+    /// Best-effort; a missing artwork file is not considered an error.
+    ///
+    /// Checks, in order, until artwork bytes are found:
+    /// 1. The common-identifier artwork item (`AVMetadataIdentifier
+    ///    .commonIdentifierArtwork`) — covers most containers in one shot.
+    /// 2. Every format-specific metadata set the asset exposes (ID3 `APIC`,
+    ///    iTunes `covr`, QuickTime/ISO user data, etc.) — covers MP3/FLAC/
+    ///    MP4 files whose artwork isn't surfaced as common metadata.
+    /// 3. The legacy `.commonMetadata` / `commonKey == "artwork"` path, kept
+    ///    as a final fallback for older/unusual assets.
     private func extractArtwork(from fileURL: URL, trackID: UUID) async -> URL? {
         let asset = AVURLAsset(url: fileURL)
-        guard let metadata = try? await asset.load(.commonMetadata) else { return nil }
-        let artworkItem = metadata.first { item in
-            item.commonKey?.rawValue == "artwork"
-        }
-        guard let artworkItem else { return nil }
-        guard let data = try? await artworkItem.load(.dataValue), !data.isEmpty else { return nil }
+        guard let data = await Self.loadArtworkData(from: asset), !data.isEmpty else { return nil }
 
         let artworkDir = libraryDirectory.appendingPathComponent("artwork", isDirectory: true)
         do {
@@ -368,21 +408,131 @@ final class LocalLibraryManager: ObservableObject {
         } catch {
             return nil
         }
-        // JPEG starts with FF D8 FF; PNG starts with 89 50 4E 47.
-        let ext: String
-        if data.starts(with: [0xFF, 0xD8]) {
-            ext = "jpg"
-        } else if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
-            ext = "png"
-        } else {
-            ext = "img"
-        }
+        let ext = Self.artworkFileExtension(for: data)
         let dest = artworkDir.appendingPathComponent("\(trackID.uuidString).\(ext)")
         do {
             try AtomicFileWriter.writeAtomically(data, to: dest)
             return dest
         } catch {
             return nil
+        }
+    }
+
+    /// Loads embedded artwork bytes from `asset` by trying the
+    /// common-identifier item, then every format-specific metadata set
+    /// the asset advertises, then the legacy common-metadata path. Returns
+    /// nil if no artwork bytes can be found anywhere. Never throws.
+    ///
+    /// Generic over `MetadataLoading` (which `AVURLAsset` conforms to via
+    /// `AVAsynchronousKeyValueLoading`) so tests can inject a synthetic
+    /// asset double instead of needing real audio fixtures.
+    static func loadArtworkData(from asset: some MetadataLoading) async -> Data? {
+        // 1. Common-identifier artwork (works across most containers) —
+        // filter the full per-asset metadata set by the well-known
+        // artwork identifier.
+        if let allItems = try? await asset.loadAllMetadataItems() {
+            let commonArtworkItems = AVMetadataItem.metadataItems(
+                from: allItems,
+                filteredByIdentifier: .commonIdentifierArtwork
+            )
+            if let data = await Self.firstArtworkData(in: commonArtworkItems) {
+                return data
+            }
+            // Same data, scanned via the broader identifier/key heuristics
+            // (covers formats whose artwork isn't tagged with the common
+            // identifier but does show up in the full metadata set).
+            let heuristicItems = allItems.filter { Self.isArtworkItem($0) }
+            if let data = await Self.firstArtworkData(in: heuristicItems) {
+                return data
+            }
+        }
+
+        // 2. Format-specific metadata sets (ID3 APIC, iTunes covr, etc.) —
+        // some assets only surface artwork when queried per-format rather
+        // than via the combined `.metadata` key.
+        if let formats = try? await asset.loadAvailableMetadataFormats() {
+            for format in formats {
+                guard let items = try? await asset.loadMetadataItems(for: format) else { continue }
+                let artworkItems = items.filter { Self.isArtworkItem($0) }
+                if let data = await Self.firstArtworkData(in: artworkItems) {
+                    return data
+                }
+            }
+        }
+
+        // 3. Legacy fallback: scan common metadata for `commonKey == "artwork"`.
+        if let metadata = try? await asset.loadCommonMetadataItems() {
+            let artworkItems = metadata.filter { $0.commonKey?.rawValue == "artwork" }
+            if let data = await Self.firstArtworkData(in: artworkItems) {
+                return data
+            }
+        }
+
+        return nil
+    }
+
+    /// True if `item` represents embedded artwork under any of the
+    /// well-known format-specific identifiers/keys: ID3 `APIC`, iTunes
+    /// `covr`, QuickTime metadata artwork, or the generic common-artwork
+    /// identifier/key.
+    private static func isArtworkItem(_ item: AVMetadataItem) -> Bool {
+        if item.commonKey?.rawValue == "artwork" { return true }
+        if let identifier = item.identifier {
+            switch identifier {
+            case .commonIdentifierArtwork,
+                 .id3MetadataAttachedPicture,
+                 .iTunesMetadataCoverArt,
+                 .quickTimeMetadataArtwork:
+                return true
+            default:
+                break
+            }
+        }
+        // ID3 keys surface as the raw frame name ("APIC") rather than via
+        // `.identifier` in some asset/format combinations.
+        if let keyString = item.key as? String, keyString == "APIC" { return true }
+        return false
+    }
+
+    /// Returns the first non-empty artwork `Data` found among `items`,
+    /// trying `dataValue` first and falling back to coercing `value` for
+    /// items whose payload isn't surfaced as raw `Data` (e.g. wrapped in
+    /// an `NSData`-backed `NSValue`/dictionary on some format paths).
+    private static func firstArtworkData(in items: [AVMetadataItem]) async -> Data? {
+        for item in items {
+            if let data = try? await item.load(.dataValue), !data.isEmpty {
+                return data
+            }
+            if let data = await Self.coerceToData(item) {
+                return data
+            }
+        }
+        return nil
+    }
+
+    /// Best-effort coercion of an `AVMetadataItem`'s loaded `value` into
+    /// `Data`, for the rare items that carry artwork bytes outside
+    /// `dataValue` (e.g. as raw `Data`/`NSData` in `.value`).
+    private static func coerceToData(_ item: AVMetadataItem) async -> Data? {
+        guard let value = try? await item.load(.value) else { return nil }
+        if let data = value as? Data, !data.isEmpty { return data }
+        if let nsData = value as? NSData, nsData.length > 0 { return nsData as Data }
+        return nil
+    }
+
+    /// Sniffs `data`'s magic bytes to choose a file extension for the
+    /// artwork file. JPEG starts with FF D8 FF; PNG starts with
+    /// 89 50 4E 47; GIF starts with "GIF8"; falls back to "img" for any
+    /// other (still-valid) image payload.
+    static func artworkFileExtension(for data: Data) -> String {
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) {
+            return "jpg"
+        } else if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+            return "png"
+        } else if data.starts(with: [0x47, 0x49, 0x46, 0x38]) {
+            return "gif"
+        } else {
+            return "img"
         }
     }
 
