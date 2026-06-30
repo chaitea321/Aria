@@ -169,6 +169,10 @@ struct FullScreenPlayerView: View {
                 Text("Seek")
             }
             .tint(themeManager.theme.accentColor)
+            // Native Slider announces a bare percentage; give VoiceOver a
+            // meaningful position ("1:05 of 3:20") and an adjustable label.
+            .accessibilityLabel("Playback position")
+            .accessibilityValue("\(formatTime(clock.currentTime)) of \(formatTime(clock.duration))")
 
             HStack {
                 Text(formatTime(clock.currentTime))

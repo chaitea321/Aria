@@ -166,5 +166,10 @@ struct FavoritesView: View {
         }
         .buttonStyle(.plain)
         .addToQueueGesture(playerManager: playerManager, track: track)
+        .trackRowAccessibility(
+            title: track.title, artist: track.artist,
+            isCurrent: playerManager.currentTrack?.id == track.id,
+            isPlaying: playerManager.isPlaying
+        )
     }
 }

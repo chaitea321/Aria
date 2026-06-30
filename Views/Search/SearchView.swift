@@ -267,6 +267,11 @@ struct SearchView: View {
                     }
                     .buttonStyle(.plain)
                     .addToQueueGesture(playerManager: playerManager, track: track)
+                    .trackRowAccessibility(
+                        title: track.title, artist: track.artist,
+                        isCurrent: isCurrent,
+                        isPlaying: playerManager.isPlaying
+                    )
                     .listRowBackground(tokens.background)
                     .listRowSeparatorTint(tokens.hairline)
                     .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.md, bottom: 4, trailing: DS.Spacing.md))
