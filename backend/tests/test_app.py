@@ -115,15 +115,62 @@ def test_xff_ignored_without_trusted_proxy(client, monkeypatch):
     assert client.get("/api/search", params={"q": "a"}, headers={"X-Forwarded-For": "9.9.9.9"}).status_code == 429
 
 
-def test_client_ip_picks_hop_left_of_trusted_proxies(monkeypatch):
+def test_client_ip_uses_proxy_appended_hop_not_forged_prefix(monkeypatch):
+    """Behind one trusted proxy, the trustworthy client IP is the entry our
+    proxy appended on the RIGHT. A client can forge arbitrary left-hand hops;
+    those must never be trusted (else rate limiting is trivially bypassed)."""
     monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 1)
 
     class _Req:
-        headers = {"x-forwarded-for": "203.0.113.7, 10.0.0.1"}
+        # "6.6.6.6" is a client-forged prefix; "203.0.113.7" is what our single
+        # reverse proxy appended = the real peer that connected to it.
+        headers = {"x-forwarded-for": "6.6.6.6, 203.0.113.7"}
         client = None
 
-    # Rightmost hop (10.0.0.1) is our proxy; the real client is just left of it.
     assert appmod._client_ip(_Req()) == "203.0.113.7"
+
+
+def test_client_ip_forged_prefix_cannot_rotate_identity(monkeypatch):
+    """A rotating forged prefix must resolve to the SAME real client, so it
+    cannot mint a fresh rate-limit bucket per request."""
+    monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 1)
+
+    def ip(xff):
+        class _Req:
+            headers = {"x-forwarded-for": xff}
+            client = None
+        return appmod._client_ip(_Req())
+
+    assert ip("1.1.1.1, 203.0.113.7") == "203.0.113.7"
+    assert ip("2.2.2.2, 203.0.113.7") == "203.0.113.7"
+    assert ip("3.3.3.3, 4.4.4.4, 203.0.113.7") == "203.0.113.7"
+
+
+def test_client_ip_two_trusted_proxies(monkeypatch):
+    # proxyB appended proxyA (10.0.0.9); proxyA appended the real client
+    # (203.0.113.7); "6.6.6.6" is the client-forged prefix.
+    monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 2)
+
+    class _Req:
+        headers = {"x-forwarded-for": "6.6.6.6, 203.0.113.7, 10.0.0.9"}
+        client = None
+
+    assert appmod._client_ip(_Req()) == "203.0.113.7"
+
+
+def test_client_ip_too_few_hops_falls_back_to_peer(monkeypatch):
+    """Fewer forwarded hops than trusted proxies (spoofing/misconfig) → fall
+    back to the socket peer, never a client-supplied entry."""
+    monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 2)
+
+    class _Client:
+        host = "198.51.100.5"
+
+    class _Req:
+        headers = {"x-forwarded-for": "6.6.6.6"}  # only 1 hop, but N=2
+        client = _Client()
+
+    assert appmod._client_ip(_Req()) == "198.51.100.5"
 
 
 def test_prune_request_log_bounds_memory(monkeypatch):

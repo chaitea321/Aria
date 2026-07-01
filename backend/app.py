@@ -302,8 +302,15 @@ def _client_ip(request: Request) -> str:
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
             parts = [p.strip() for p in fwd.split(",") if p.strip()]
-            if parts:
-                idx = max(0, len(parts) - TRUSTED_PROXY_COUNT - 1)
+            # Our N reverse proxies each append the peer they saw on the RIGHT,
+            # so the real client is the Nth-from-right entry, i.e. parts[-N] ==
+            # parts[len-N]. (The previous `len-N-1` was off by one and returned
+            # a client-forgeable hop, letting a rotating X-Forwarded-For mint a
+            # fresh rate-limit bucket per request.) If there are fewer hops than
+            # trusted proxies (spoofed/misconfigured), don't trust any
+            # client-supplied entry — fall through to the socket peer.
+            idx = len(parts) - TRUSTED_PROXY_COUNT
+            if idx >= 0:
                 return parts[idx]
     if request.client and request.client.host:
         return request.client.host
