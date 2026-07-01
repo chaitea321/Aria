@@ -273,14 +273,48 @@ def test_eviction_removes_oldest_first(cache_dir, monkeypatch):
     assert new.exists()
 
 
-def test_eviction_respects_grace_and_current(cache_dir, monkeypatch):
-    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / (1024 * 1024))
+def test_eviction_prefers_out_of_grace_files(cache_dir, monkeypatch):
+    """Normal over-cap: an in-grace file is spared as long as evicting the
+    out-of-grace file(s) gets us back under the cap."""
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / 1024)  # 1 MB
     monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 300)
-    f = _make_file(cache_dir, "ccccccccccc.bestaudio.m4a", 2 * 1024 * 1024)
-    appmod._stream_access_times["ccccccccccc"] = time.time()  # just accessed -> within grace
-    appmod._total_cache_bytes = f.stat().st_size
+    now = time.time()
+    stale = _make_file(cache_dir, "aaaaaaaaaaa.bestaudio.m4a", 700 * 1024)
+    fresh = _make_file(cache_dir, "bbbbbbbbbbb.bestaudio.m4a", 700 * 1024)
+    appmod._stream_access_times["aaaaaaaaaaa"] = now - 10_000  # out of grace
+    appmod._stream_access_times["bbbbbbbbbbb"] = now - 1       # in grace
+    appmod._total_cache_bytes = stale.stat().st_size + fresh.stat().st_size
     asyncio.run(appmod._evict_if_needed())
-    assert f.exists()  # protected by grace window
+    assert not stale.exists()  # out-of-grace evicted
+    assert fresh.exists()      # in-grace spared (cap satisfied without it)
+
+
+def test_eviction_current_video_never_evicted(cache_dir, monkeypatch):
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / (1024 * 1024))  # ~1 byte
+    monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 0)
+    f = _make_file(cache_dir, "ccccccccccc.bestaudio.m4a", 2 * 1024 * 1024)
+    appmod._stream_access_times["ccccccccccc"] = time.time() - 10_000
+    appmod._total_cache_bytes = f.stat().st_size
+    asyncio.run(appmod._evict_if_needed(current_video_id="ccccccccccc"))
+    assert f.exists()  # the actively-playing file is never evicted
+
+
+def test_eviction_hard_cap_overrides_grace_when_starved(cache_dir, monkeypatch):
+    """If every non-current file is within grace and we're still over cap,
+    eviction makes forward progress instead of silently exceeding MAX_CACHE_GB
+    (the starvation bug: grace short-circuits every candidate → 0 bytes freed)."""
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / 1024)  # 1 MB
+    monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 300)
+    now = time.time()
+    old = _make_file(cache_dir, "ddddddddddd.bestaudio.m4a", 700 * 1024)
+    new = _make_file(cache_dir, "eeeeeeeeeee.bestaudio.m4a", 700 * 1024)
+    appmod._stream_access_times["ddddddddddd"] = now - 30  # in grace, older
+    appmod._stream_access_times["eeeeeeeeeee"] = now - 1   # in grace, newer
+    appmod._total_cache_bytes = old.stat().st_size + new.stat().st_size
+    asyncio.run(appmod._evict_if_needed())
+    assert appmod._total_cache_bytes <= int(appmod.MAX_CACHE_GB * 1024 ** 3)
+    assert not old.exists()  # oldest in-grace evicted to make progress
+    assert new.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -910,6 +910,22 @@ async def _evict_if_needed(current_video_id: str = ""):
 
         files_with_age.sort(key=lambda x: x[0])
 
+        def _evict_one(f, vid, last_access, forced):
+            global _total_cache_bytes
+            try:
+                file_size = f.stat().st_size
+                f.unlink()
+                _stream_access_times.pop(vid, None)
+                _total_cache_bytes -= file_size
+                logger.info(
+                    "Evicted %s (idle %.0fs%s)", f.name, now - last_access,
+                    "; forced over hard cap" if forced else "",
+                )
+            except OSError:
+                pass
+
+        # First pass: oldest-accessed files outside the grace window. Never
+        # touch the current track.
         for last_access, f, vid in files_with_age:
             if _total_cache_bytes <= limit_bytes:
                 break
@@ -917,14 +933,24 @@ async def _evict_if_needed(current_video_id: str = ""):
                 continue
             if now - last_access < grace:
                 continue
-            try:
-                file_size = f.stat().st_size
-                f.unlink()
-                _stream_access_times.pop(vid, None)
-                _total_cache_bytes -= file_size
-                logger.info("Evicted %s (idle %.0fs)", f.name, now - last_access)
-            except OSError:
-                pass
+            _evict_one(f, vid, last_access, forced=False)
+
+        # Forward-progress pass: if every remaining candidate is within the
+        # grace window but we're still over the hard cap, evict oldest-first
+        # regardless of grace. Without this, a sustained stream of distinct IDs
+        # (all accessed within CACHE_EVICT_GRACE_SECONDS) frees zero bytes and
+        # the cache grows past MAX_CACHE_GB unbounded until the disk-full 507
+        # trips. The current track is still spared.
+        if _total_cache_bytes > limit_bytes:
+            for last_access, f, vid in files_with_age:
+                if _total_cache_bytes <= limit_bytes:
+                    break
+                if vid == current_video_id:
+                    continue
+                if not f.exists():
+                    continue  # already evicted in the first pass
+                _evict_one(f, vid, last_access, forced=True)
+
         _save_access_times()
 
 
