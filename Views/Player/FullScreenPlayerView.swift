@@ -274,6 +274,30 @@ struct FullScreenPlayerView: View {
                     .foregroundColor(themeManager.textPrimary)
             }
 
+            Menu {
+                ForEach(PlayerManager.playbackRatePresets, id: \.self) { rate in
+                    Button {
+                        playerManager.setPlaybackRate(rate)
+                    } label: {
+                        if playerManager.playbackRate == rate {
+                            Label(speedLabel(rate), systemImage: "checkmark")
+                        } else {
+                            Text(speedLabel(rate))
+                        }
+                    }
+                }
+            } label: {
+                Text(speedLabel(playerManager.playbackRate))
+                    .font(.system(size: 15, weight: .semibold))
+                    .monospacedDigit()
+                    .frame(minWidth: 34)
+                    .foregroundColor(playerManager.playbackRate == 1.0
+                                     ? themeManager.textPrimary
+                                     : themeManager.theme.accentColor)
+            }
+            .accessibilityLabel("Playback speed")
+            .accessibilityValue(speedLabel(playerManager.playbackRate))
+
             if let url = playerManager.currentTrack?.thumbnailURL {
                 ShareLink(item: url) {
                     Image(systemName: "square.and.arrow.up")
@@ -283,6 +307,11 @@ struct FullScreenPlayerView: View {
             }
         }
         .padding(.bottom, 32)
+    }
+
+    /// "1×", "0.5×", "1.25×" — `%g` trims trailing zeros.
+    private func speedLabel(_ rate: Float) -> String {
+        "\(String(format: "%g", Double(rate)))×"
     }
 
     // MARK: - Add to Playlist Sheet

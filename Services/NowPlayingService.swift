@@ -45,7 +45,7 @@ final class NowPlayingService {
             MPMediaItemPropertyArtist: track.artist,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
             MPMediaItemPropertyPlaybackDuration: player.duration,
-            MPNowPlayingInfoPropertyPlaybackRate: player.isPlaying ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyPlaybackRate: player.isPlaying ? Double(player.playbackRate) : 0.0,
             // Media type lets the system treat this as a music item; without it
             // some lock-screen/CarPlay surfaces won't show transport correctly.
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
