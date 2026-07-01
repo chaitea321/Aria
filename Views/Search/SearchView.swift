@@ -11,6 +11,13 @@ struct SearchView: View {
     @State private var results: Loadable<[Track]> = .idle
     @FocusState private var isSearchFocused: Bool
 
+    // Pagination state for infinite scroll.
+    @State private var activeQuery = ""
+    @State private var nextOffset = 0
+    @State private var canLoadMore = false
+    @State private var isLoadingMore = false
+    private let pageSize = 25
+
     private let searchService: YouTubeSearchService
     private var tokens: DesignTokens { themeManager.tokens }
 
@@ -261,6 +268,14 @@ struct SearchView: View {
                             }
 
                             Spacer(minLength: 0)
+
+                            if let secs = track.duration {
+                                Text(formatDuration(secs))
+                                    .font(DS.Typography.caption)
+                                    .monospacedDigit()
+                                    .foregroundColor(tokens.textSecondary)
+                                    .accessibilityHidden(true)
+                            }
                         }
                         .padding(.vertical, 2)
                         .contentShape(Rectangle())
@@ -275,6 +290,34 @@ struct SearchView: View {
                     .listRowBackground(tokens.background)
                     .listRowSeparatorTint(tokens.hairline)
                     .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.md, bottom: 4, trailing: DS.Spacing.md))
+                    .onAppear {
+                        // Infinite scroll: trigger the next page when the last
+                        // row appears. This re-fires reliably on every page as
+                        // each new last row scrolls in (a footer .onAppear, by
+                        // contrast, fires only once for a persistent element).
+                        if track.id == tracks.last?.id {
+                            Task { await loadMore() }
+                        }
+                    }
+                }
+
+                // Persistent spinner shown while more pages may exist. Keyed on
+                // canLoadMore (true across pages until the end), NOT the transient
+                // isLoadingMore. Uses a self-animating spinner rather than
+                // ProgressView: SwiftUI reuses the persistent footer and its
+                // wrapped UIActivityIndicatorView stops animating after page 1,
+                // and a *stopped* indicator is hidden (hidesWhenStopped) — which
+                // showed as an empty gap with no visible spinner on later pages.
+                if canLoadMore {
+                    HStack {
+                        Spacer()
+                        InlineSpinner(color: tokens.textSecondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DS.Spacing.md)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
             }
         }
@@ -400,6 +443,8 @@ struct SearchView: View {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 3 else {
             results = .idle
+            canLoadMore = false
+            nextOffset = 0
             return
         }
 
@@ -417,14 +462,75 @@ struct SearchView: View {
         results = .loading
 
         do {
-            let tracks = try await searchService.search(query: trimmed)
+            let tracks = try await searchService.search(query: trimmed, limit: pageSize, offset: 0)
             try Task.checkCancellation()
             results = .loaded(tracks)
+            activeQuery = trimmed
+            nextOffset = tracks.count
+            // yt-dlp often returns slightly fewer than `pageSize`, so don't gate
+            // on an exact count — try another page whenever the first one was
+            // non-empty. loadMore() stops as soon as a page brings nothing new.
+            canLoadMore = !tracks.isEmpty
             settingsManager.addSearchToHistory(trimmed)
         } catch is CancellationError {
             // Superseded by a newer query; do not flip the state.
         } catch {
             results = .failed(error)
         }
+    }
+
+    /// Appends the next page when the user scrolls to the bottom. No-ops if the
+    /// last page was short (end reached), one is already in flight, or the query
+    /// changed mid-flight.
+    private func loadMore() async {
+        guard canLoadMore, !isLoadingMore, results.value != nil else { return }
+        let q = activeQuery
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let more = try await searchService.search(query: q, limit: pageSize, offset: nextOffset)
+            guard q == activeQuery, let current = results.value else { return }
+            let existing = Set(current.map(\.id))
+            let fresh = more.filter { !existing.contains($0.id) }
+            if !fresh.isEmpty { results = .loaded(current + fresh) }
+            nextOffset += more.count
+            // Stop when the backend returns nothing OR nothing new (the latter
+            // also cleanly ends pagination against a backend that ignores
+            // `offset` and keeps re-returning the same page).
+            canLoadMore = !fresh.isEmpty
+        } catch {
+            // Stop paginating on error but keep the results already shown.
+            canLoadMore = false
+        }
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// A self-animating loading spinner that keeps spinning for as long as it is on
+/// screen. Unlike SwiftUI's `ProgressView` (which wraps a `UIActivityIndicatorView`
+/// that stops — and thus hides — when reused inside a persistent `List` footer),
+/// this drives its own repeating `rotationEffect`, so it stays visible on every
+/// page of infinite scroll, not just the first.
+private struct InlineSpinner: View {
+    var color: Color
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .frame(width: 20, height: 20)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .onAppear {
+                spinning = false
+                withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
+                    spinning = true
+                }
+            }
+            .accessibilityLabel("Loading more results")
     }
 }
