@@ -116,6 +116,14 @@ final class PlayerManagerTests: XCTestCase {
         XCTAssertEqual(player.queue.map(\.id), ["1", "3"])
     }
 
+    func test_QueueMoveReorders() {
+        player.addToQueue(makeTrack(id: "1", title: "A"))
+        player.addToQueue(makeTrack(id: "2", title: "B"))
+        player.addToQueue(makeTrack(id: "3", title: "C"))
+        player.moveInQueue(from: IndexSet(integer: 0), to: 3)
+        XCTAssertEqual(player.queue.map(\.id), ["2", "3", "1"])
+    }
+
     func test_QueueClearRemovesAll() {
         player.addToQueue(makeTrack(id: "1", title: "A"))
         player.addToQueue(makeTrack(id: "2", title: "B"))
