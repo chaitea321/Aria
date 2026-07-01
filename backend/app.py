@@ -203,6 +203,28 @@ def _load_access_times() -> None:
         logger.warning("Could not load access times: %s", e)
 
 
+def _seed_access_times_from_disk() -> None:
+    """Backfill LRU timestamps from each cached file's mtime for any video not
+    already in the table.
+
+    Guards against a lost/corrupt .access_times.json: _load_access_times() then
+    leaves the table empty, so every file reads as epoch-0 and eviction's sort
+    collapses to arbitrary glob order (it could drop a recently-used track).
+    mtime is a reasonable recency proxy that survives the JSON going missing."""
+    if not CACHE_DIR.exists():
+        return
+    for f in CACHE_DIR.glob("*.*"):
+        if not f.is_file() or _is_partial(f):
+            continue
+        vid = f.name.split(".", 1)[0]
+        if vid in _stream_access_times:
+            continue
+        try:
+            _stream_access_times[vid] = f.stat().st_mtime
+        except OSError:
+            pass
+
+
 def _save_access_times() -> None:
     f = _access_times_file()
     try:
@@ -233,6 +255,7 @@ async def lifespan(_app: FastAPI):
     global _total_cache_bytes
     removed = _cleanup_partial_files()
     _load_access_times()
+    _seed_access_times_from_disk()
     if CACHE_DIR.exists():
         for f in CACHE_DIR.glob("*.*"):
             if f.is_file() and not f.name.startswith("."):
@@ -302,8 +325,15 @@ def _client_ip(request: Request) -> str:
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
             parts = [p.strip() for p in fwd.split(",") if p.strip()]
-            if parts:
-                idx = max(0, len(parts) - TRUSTED_PROXY_COUNT - 1)
+            # Our N reverse proxies each append the peer they saw on the RIGHT,
+            # so the real client is the Nth-from-right entry, i.e. parts[-N] ==
+            # parts[len-N]. (The previous `len-N-1` was off by one and returned
+            # a client-forgeable hop, letting a rotating X-Forwarded-For mint a
+            # fresh rate-limit bucket per request.) If there are fewer hops than
+            # trusted proxies (spoofed/misconfigured), don't trust any
+            # client-supplied entry — fall through to the socket peer.
+            idx = len(parts) - TRUSTED_PROXY_COUNT
+            if idx >= 0:
                 return parts[idx]
     if request.client and request.client.host:
         return request.client.host
@@ -814,6 +844,30 @@ def _is_valid_media(path: Path) -> bool:
         return False
 
 
+def _cleanup_partials_for(video_id: str) -> int:
+    """Remove *this* video's interrupted-download artifacts (*.part/.ytdl/etc).
+
+    Scoped to one video_id so it never touches another request's in-flight
+    download. Called on the /api/play failure path: aborted or oversized
+    downloads otherwise leak partials that `_evict_if_needed` skips and that
+    are uncounted by `_total_cache_bytes`, so only the startup sweep would
+    reclaim them — between restarts they accumulate and eventually trip the
+    disk-full 507 permanently."""
+    removed = 0
+    for pattern in (f"{_cache_basename(video_id)}.*", f"{video_id}.*"):
+        for f in CACHE_DIR.glob(pattern):
+            if not f.is_file():
+                continue
+            name = f.name.lower()
+            if any(name.endswith(s) for s in _PARTIAL_SUFFIXES):
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
+
+
 def _cleanup_partial_files() -> int:
     """Remove interrupted-download artifacts and zero-byte files. Returns the
     number removed. Called on startup; '.'-dotfiles like the access-times JSON
@@ -874,11 +928,34 @@ async def _evict_if_needed(current_video_id: str = ""):
             if not f.is_file() or _is_partial(f):
                 continue
             vid = f.name.split(".", 1)[0]
-            last_access = _stream_access_times.get(vid, 0)
+            last_access = _stream_access_times.get(vid)
+            if last_access is None:
+                # Missing from the LRU table (e.g. .access_times.json was lost):
+                # use mtime rather than 0 so eviction keeps a real recency order.
+                try:
+                    last_access = f.stat().st_mtime
+                except OSError:
+                    last_access = 0.0
             files_with_age.append((last_access, f, vid))
 
         files_with_age.sort(key=lambda x: x[0])
 
+        def _evict_one(f, vid, last_access, forced):
+            global _total_cache_bytes
+            try:
+                file_size = f.stat().st_size
+                f.unlink()
+                _stream_access_times.pop(vid, None)
+                _total_cache_bytes -= file_size
+                logger.info(
+                    "Evicted %s (idle %.0fs%s)", f.name, now - last_access,
+                    "; forced over hard cap" if forced else "",
+                )
+            except OSError:
+                pass
+
+        # First pass: oldest-accessed files outside the grace window. Never
+        # touch the current track.
         for last_access, f, vid in files_with_age:
             if _total_cache_bytes <= limit_bytes:
                 break
@@ -886,14 +963,24 @@ async def _evict_if_needed(current_video_id: str = ""):
                 continue
             if now - last_access < grace:
                 continue
-            try:
-                file_size = f.stat().st_size
-                f.unlink()
-                _stream_access_times.pop(vid, None)
-                _total_cache_bytes -= file_size
-                logger.info("Evicted %s (idle %.0fs)", f.name, now - last_access)
-            except OSError:
-                pass
+            _evict_one(f, vid, last_access, forced=False)
+
+        # Forward-progress pass: if every remaining candidate is within the
+        # grace window but we're still over the hard cap, evict oldest-first
+        # regardless of grace. Without this, a sustained stream of distinct IDs
+        # (all accessed within CACHE_EVICT_GRACE_SECONDS) frees zero bytes and
+        # the cache grows past MAX_CACHE_GB unbounded until the disk-full 507
+        # trips. The current track is still spared.
+        if _total_cache_bytes > limit_bytes:
+            for last_access, f, vid in files_with_age:
+                if _total_cache_bytes <= limit_bytes:
+                    break
+                if vid == current_video_id:
+                    continue
+                if not f.exists():
+                    continue  # already evicted in the first pass
+                _evict_one(f, vid, last_access, forced=True)
+
         _save_access_times()
 
 
@@ -948,6 +1035,7 @@ async def play(
     except Exception as e:
         _metrics["failures_by_reason"]["download_error"] += 1
         logger.error("Download failed for %s: %s", video_id, e)
+        _cleanup_partials_for(video_id)
         raise HTTPException(status_code=502, detail=f"Download failed: {str(e)}")
     finally:
         event.set()
@@ -969,6 +1057,7 @@ async def play(
         except OSError:
             pass
         _metrics["failures_by_reason"]["invalid_media"] += 1
+    _cleanup_partials_for(video_id)
     raise HTTPException(status_code=502, detail="Failed to download valid audio")
 
 

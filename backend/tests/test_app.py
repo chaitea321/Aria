@@ -115,15 +115,62 @@ def test_xff_ignored_without_trusted_proxy(client, monkeypatch):
     assert client.get("/api/search", params={"q": "a"}, headers={"X-Forwarded-For": "9.9.9.9"}).status_code == 429
 
 
-def test_client_ip_picks_hop_left_of_trusted_proxies(monkeypatch):
+def test_client_ip_uses_proxy_appended_hop_not_forged_prefix(monkeypatch):
+    """Behind one trusted proxy, the trustworthy client IP is the entry our
+    proxy appended on the RIGHT. A client can forge arbitrary left-hand hops;
+    those must never be trusted (else rate limiting is trivially bypassed)."""
     monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 1)
 
     class _Req:
-        headers = {"x-forwarded-for": "203.0.113.7, 10.0.0.1"}
+        # "6.6.6.6" is a client-forged prefix; "203.0.113.7" is what our single
+        # reverse proxy appended = the real peer that connected to it.
+        headers = {"x-forwarded-for": "6.6.6.6, 203.0.113.7"}
         client = None
 
-    # Rightmost hop (10.0.0.1) is our proxy; the real client is just left of it.
     assert appmod._client_ip(_Req()) == "203.0.113.7"
+
+
+def test_client_ip_forged_prefix_cannot_rotate_identity(monkeypatch):
+    """A rotating forged prefix must resolve to the SAME real client, so it
+    cannot mint a fresh rate-limit bucket per request."""
+    monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 1)
+
+    def ip(xff):
+        class _Req:
+            headers = {"x-forwarded-for": xff}
+            client = None
+        return appmod._client_ip(_Req())
+
+    assert ip("1.1.1.1, 203.0.113.7") == "203.0.113.7"
+    assert ip("2.2.2.2, 203.0.113.7") == "203.0.113.7"
+    assert ip("3.3.3.3, 4.4.4.4, 203.0.113.7") == "203.0.113.7"
+
+
+def test_client_ip_two_trusted_proxies(monkeypatch):
+    # proxyB appended proxyA (10.0.0.9); proxyA appended the real client
+    # (203.0.113.7); "6.6.6.6" is the client-forged prefix.
+    monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 2)
+
+    class _Req:
+        headers = {"x-forwarded-for": "6.6.6.6, 203.0.113.7, 10.0.0.9"}
+        client = None
+
+    assert appmod._client_ip(_Req()) == "203.0.113.7"
+
+
+def test_client_ip_too_few_hops_falls_back_to_peer(monkeypatch):
+    """Fewer forwarded hops than trusted proxies (spoofing/misconfig) → fall
+    back to the socket peer, never a client-supplied entry."""
+    monkeypatch.setattr(appmod, "TRUSTED_PROXY_COUNT", 2)
+
+    class _Client:
+        host = "198.51.100.5"
+
+    class _Req:
+        headers = {"x-forwarded-for": "6.6.6.6"}  # only 1 hop, but N=2
+        client = _Client()
+
+    assert appmod._client_ip(_Req()) == "198.51.100.5"
 
 
 def test_prune_request_log_bounds_memory(monkeypatch):
@@ -226,14 +273,48 @@ def test_eviction_removes_oldest_first(cache_dir, monkeypatch):
     assert new.exists()
 
 
-def test_eviction_respects_grace_and_current(cache_dir, monkeypatch):
-    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / (1024 * 1024))
+def test_eviction_prefers_out_of_grace_files(cache_dir, monkeypatch):
+    """Normal over-cap: an in-grace file is spared as long as evicting the
+    out-of-grace file(s) gets us back under the cap."""
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / 1024)  # 1 MB
     monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 300)
-    f = _make_file(cache_dir, "ccccccccccc.bestaudio.m4a", 2 * 1024 * 1024)
-    appmod._stream_access_times["ccccccccccc"] = time.time()  # just accessed -> within grace
-    appmod._total_cache_bytes = f.stat().st_size
+    now = time.time()
+    stale = _make_file(cache_dir, "aaaaaaaaaaa.bestaudio.m4a", 700 * 1024)
+    fresh = _make_file(cache_dir, "bbbbbbbbbbb.bestaudio.m4a", 700 * 1024)
+    appmod._stream_access_times["aaaaaaaaaaa"] = now - 10_000  # out of grace
+    appmod._stream_access_times["bbbbbbbbbbb"] = now - 1       # in grace
+    appmod._total_cache_bytes = stale.stat().st_size + fresh.stat().st_size
     asyncio.run(appmod._evict_if_needed())
-    assert f.exists()  # protected by grace window
+    assert not stale.exists()  # out-of-grace evicted
+    assert fresh.exists()      # in-grace spared (cap satisfied without it)
+
+
+def test_eviction_current_video_never_evicted(cache_dir, monkeypatch):
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / (1024 * 1024))  # ~1 byte
+    monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 0)
+    f = _make_file(cache_dir, "ccccccccccc.bestaudio.m4a", 2 * 1024 * 1024)
+    appmod._stream_access_times["ccccccccccc"] = time.time() - 10_000
+    appmod._total_cache_bytes = f.stat().st_size
+    asyncio.run(appmod._evict_if_needed(current_video_id="ccccccccccc"))
+    assert f.exists()  # the actively-playing file is never evicted
+
+
+def test_eviction_hard_cap_overrides_grace_when_starved(cache_dir, monkeypatch):
+    """If every non-current file is within grace and we're still over cap,
+    eviction makes forward progress instead of silently exceeding MAX_CACHE_GB
+    (the starvation bug: grace short-circuits every candidate → 0 bytes freed)."""
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / 1024)  # 1 MB
+    monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 300)
+    now = time.time()
+    old = _make_file(cache_dir, "ddddddddddd.bestaudio.m4a", 700 * 1024)
+    new = _make_file(cache_dir, "eeeeeeeeeee.bestaudio.m4a", 700 * 1024)
+    appmod._stream_access_times["ddddddddddd"] = now - 30  # in grace, older
+    appmod._stream_access_times["eeeeeeeeeee"] = now - 1   # in grace, newer
+    appmod._total_cache_bytes = old.stat().st_size + new.stat().st_size
+    asyncio.run(appmod._evict_if_needed())
+    assert appmod._total_cache_bytes <= int(appmod.MAX_CACHE_GB * 1024 ** 3)
+    assert not old.exists()  # oldest in-grace evicted to make progress
+    assert new.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +347,38 @@ def test_cleanup_removes_partial_artifacts(cache_dir):
     removed = appmod._cleanup_partial_files()
     assert removed == 3
     assert keep.exists()
+
+
+def test_play_failure_sweeps_this_videos_partials(cache_dir, client, monkeypatch):
+    """A download that aborts/oversizes leaves a *.part that eviction skips and
+    only the startup sweep reclaims → unbounded growth toward a persistent 507.
+    The /api/play failure path must sweep this video's own partials at request
+    time."""
+    vid = "dQw4w9WgXcQ"
+    partial = cache_dir / f"{appmod._cache_basename(vid)}.bestaudio.m4a.part"
+
+    def fake_dl(v):
+        partial.write_bytes(b"\0" * 4096)  # interrupted download artifact
+        raise RuntimeError("Read timed out")
+
+    monkeypatch.setattr(appmod, "_download_with_retry", fake_dl)
+    r = client.get("/api/play", params={"video_id": vid})
+    assert r.status_code == 502
+    assert not partial.exists()
+
+
+def test_play_failure_leaves_other_videos_partials(cache_dir, client, monkeypatch):
+    """The request-time sweep is scoped to the failing video_id — a different
+    video's in-flight partial must never be deleted."""
+    other = cache_dir / f"{appmod._cache_basename('otherVid123')}.bestaudio.m4a.part"
+    other.write_bytes(b"\0" * 4096)
+
+    def fake_dl(v):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(appmod, "_download_with_retry", fake_dl)
+    client.get("/api/play", params={"video_id": "dQw4w9WgXcQ"})
+    assert other.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +457,47 @@ def test_record_access_persists(cache_dir):
     appmod._stream_access_times.clear()
     appmod._load_access_times()
     assert "lllllllllll" in appmod._stream_access_times
+
+
+def test_seed_access_times_from_disk_uses_mtime(cache_dir):
+    """A lost/corrupt .access_times.json leaves the LRU table empty; seed it
+    from each file's mtime so eviction keeps a real recency order instead of
+    epoch-0/glob order."""
+    now = time.time()
+    a = _make_file(cache_dir, "aaaaaaaaaaa.bestaudio.m4a", 100)
+    b = _make_file(cache_dir, "bbbbbbbbbbb.bestaudio.m4a", 100)
+    os.utime(a, (now - 5000, now - 5000))
+    os.utime(b, (now - 5, now - 5))
+    appmod._stream_access_times.clear()
+    appmod._seed_access_times_from_disk()
+    assert appmod._stream_access_times["aaaaaaaaaaa"] == pytest.approx(now - 5000, abs=2)
+    assert appmod._stream_access_times["bbbbbbbbbbb"] == pytest.approx(now - 5, abs=2)
+
+
+def test_seed_does_not_override_loaded_entries(cache_dir):
+    _make_file(cache_dir, "aaaaaaaaaaa.bestaudio.m4a", 100)
+    appmod._stream_access_times.clear()
+    appmod._stream_access_times["aaaaaaaaaaa"] = 999.0  # a real loaded timestamp
+    appmod._seed_access_times_from_disk()
+    assert appmod._stream_access_times["aaaaaaaaaaa"] == 999.0  # not clobbered
+
+
+def test_eviction_falls_back_to_mtime_when_access_table_empty(cache_dir, monkeypatch):
+    """Even without seeding, eviction must use a file's mtime (not 0) for any
+    video missing from the LRU table, so an empty/corrupt table can't drop the
+    most-recently-modified file."""
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / 1024)  # 1 MB
+    monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 0)
+    now = time.time()
+    old = _make_file(cache_dir, "ppppppppppp.bestaudio.m4a", 700 * 1024)
+    new = _make_file(cache_dir, "qqqqqqqqqqq.bestaudio.m4a", 700 * 1024)
+    os.utime(old, (now - 10_000, now - 10_000))
+    os.utime(new, (now - 1, now - 1))
+    appmod._stream_access_times.clear()  # wiped LRU table
+    appmod._total_cache_bytes = old.stat().st_size + new.stat().st_size
+    asyncio.run(appmod._evict_if_needed())
+    assert not old.exists()  # oldest by mtime evicted
+    assert new.exists()      # newest by mtime kept
 
 
 # ---------------------------------------------------------------------------
