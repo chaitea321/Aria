@@ -290,13 +290,23 @@ struct SearchView: View {
                     .listRowBackground(tokens.background)
                     .listRowSeparatorTint(tokens.hairline)
                     .listRowInsets(EdgeInsets(top: 4, leading: DS.Spacing.md, bottom: 4, trailing: DS.Spacing.md))
+                    .onAppear {
+                        // Infinite scroll: trigger the next page when the last
+                        // row appears. This re-fires reliably on every page as
+                        // each new last row scrolls in (a footer .onAppear, by
+                        // contrast, fires only once for a persistent element).
+                        if track.id == tracks.last?.id {
+                            Task { await loadMore() }
+                        }
+                    }
                 }
 
-                // Infinite scroll: a persistent footer row shown whenever more
-                // pages may exist. Scrolling it into view both drives the next
-                // fetch and keeps the spinner reliably visible on every page —
-                // not just the first (a per-last-row .onAppear trigger fired
-                // while this row was off-screen, so loads 2+ showed no spinner).
+                // Persistent spinner shown while more pages may exist. Keyed on
+                // canLoadMore (which stays true across pages until the end), NOT
+                // the transient isLoadingMore — the actual fetch usually finishes
+                // off-screen, so a load-scoped spinner only ever flashed on the
+                // first page. This keeps a spinner at the bottom on every page
+                // until pagination genuinely ends.
                 if canLoadMore {
                     HStack {
                         Spacer()
@@ -305,7 +315,6 @@ struct SearchView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .onAppear { Task { await loadMore() } }
                 }
             }
         }
