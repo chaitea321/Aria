@@ -203,6 +203,28 @@ def _load_access_times() -> None:
         logger.warning("Could not load access times: %s", e)
 
 
+def _seed_access_times_from_disk() -> None:
+    """Backfill LRU timestamps from each cached file's mtime for any video not
+    already in the table.
+
+    Guards against a lost/corrupt .access_times.json: _load_access_times() then
+    leaves the table empty, so every file reads as epoch-0 and eviction's sort
+    collapses to arbitrary glob order (it could drop a recently-used track).
+    mtime is a reasonable recency proxy that survives the JSON going missing."""
+    if not CACHE_DIR.exists():
+        return
+    for f in CACHE_DIR.glob("*.*"):
+        if not f.is_file() or _is_partial(f):
+            continue
+        vid = f.name.split(".", 1)[0]
+        if vid in _stream_access_times:
+            continue
+        try:
+            _stream_access_times[vid] = f.stat().st_mtime
+        except OSError:
+            pass
+
+
 def _save_access_times() -> None:
     f = _access_times_file()
     try:
@@ -233,6 +255,7 @@ async def lifespan(_app: FastAPI):
     global _total_cache_bytes
     removed = _cleanup_partial_files()
     _load_access_times()
+    _seed_access_times_from_disk()
     if CACHE_DIR.exists():
         for f in CACHE_DIR.glob("*.*"):
             if f.is_file() and not f.name.startswith("."):
@@ -905,7 +928,14 @@ async def _evict_if_needed(current_video_id: str = ""):
             if not f.is_file() or _is_partial(f):
                 continue
             vid = f.name.split(".", 1)[0]
-            last_access = _stream_access_times.get(vid, 0)
+            last_access = _stream_access_times.get(vid)
+            if last_access is None:
+                # Missing from the LRU table (e.g. .access_times.json was lost):
+                # use mtime rather than 0 so eviction keeps a real recency order.
+                try:
+                    last_access = f.stat().st_mtime
+                except OSError:
+                    last_access = 0.0
             files_with_age.append((last_access, f, vid))
 
         files_with_age.sort(key=lambda x: x[0])

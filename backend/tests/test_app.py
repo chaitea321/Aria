@@ -459,6 +459,47 @@ def test_record_access_persists(cache_dir):
     assert "lllllllllll" in appmod._stream_access_times
 
 
+def test_seed_access_times_from_disk_uses_mtime(cache_dir):
+    """A lost/corrupt .access_times.json leaves the LRU table empty; seed it
+    from each file's mtime so eviction keeps a real recency order instead of
+    epoch-0/glob order."""
+    now = time.time()
+    a = _make_file(cache_dir, "aaaaaaaaaaa.bestaudio.m4a", 100)
+    b = _make_file(cache_dir, "bbbbbbbbbbb.bestaudio.m4a", 100)
+    os.utime(a, (now - 5000, now - 5000))
+    os.utime(b, (now - 5, now - 5))
+    appmod._stream_access_times.clear()
+    appmod._seed_access_times_from_disk()
+    assert appmod._stream_access_times["aaaaaaaaaaa"] == pytest.approx(now - 5000, abs=2)
+    assert appmod._stream_access_times["bbbbbbbbbbb"] == pytest.approx(now - 5, abs=2)
+
+
+def test_seed_does_not_override_loaded_entries(cache_dir):
+    _make_file(cache_dir, "aaaaaaaaaaa.bestaudio.m4a", 100)
+    appmod._stream_access_times.clear()
+    appmod._stream_access_times["aaaaaaaaaaa"] = 999.0  # a real loaded timestamp
+    appmod._seed_access_times_from_disk()
+    assert appmod._stream_access_times["aaaaaaaaaaa"] == 999.0  # not clobbered
+
+
+def test_eviction_falls_back_to_mtime_when_access_table_empty(cache_dir, monkeypatch):
+    """Even without seeding, eviction must use a file's mtime (not 0) for any
+    video missing from the LRU table, so an empty/corrupt table can't drop the
+    most-recently-modified file."""
+    monkeypatch.setattr(appmod, "MAX_CACHE_GB", 1.0 / 1024)  # 1 MB
+    monkeypatch.setattr(appmod, "CACHE_EVICT_GRACE_SECONDS", 0)
+    now = time.time()
+    old = _make_file(cache_dir, "ppppppppppp.bestaudio.m4a", 700 * 1024)
+    new = _make_file(cache_dir, "qqqqqqqqqqq.bestaudio.m4a", 700 * 1024)
+    os.utime(old, (now - 10_000, now - 10_000))
+    os.utime(new, (now - 1, now - 1))
+    appmod._stream_access_times.clear()  # wiped LRU table
+    appmod._total_cache_bytes = old.stat().st_size + new.stat().st_size
+    asyncio.run(appmod._evict_if_needed())
+    assert not old.exists()  # oldest by mtime evicted
+    assert new.exists()      # newest by mtime kept
+
+
 # ---------------------------------------------------------------------------
 # metrics & percentiles
 # ---------------------------------------------------------------------------
