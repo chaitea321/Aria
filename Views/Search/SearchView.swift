@@ -302,17 +302,20 @@ struct SearchView: View {
                 }
 
                 // Persistent spinner shown while more pages may exist. Keyed on
-                // canLoadMore (which stays true across pages until the end), NOT
-                // the transient isLoadingMore — the actual fetch usually finishes
-                // off-screen, so a load-scoped spinner only ever flashed on the
-                // first page. This keeps a spinner at the bottom on every page
-                // until pagination genuinely ends.
+                // canLoadMore (true across pages until the end), NOT the transient
+                // isLoadingMore. Uses a self-animating spinner rather than
+                // ProgressView: SwiftUI reuses the persistent footer and its
+                // wrapped UIActivityIndicatorView stops animating after page 1,
+                // and a *stopped* indicator is hidden (hidesWhenStopped) — which
+                // showed as an empty gap with no visible spinner on later pages.
                 if canLoadMore {
                     HStack {
                         Spacer()
-                        ProgressView()
+                        InlineSpinner(color: tokens.textSecondary)
                         Spacer()
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DS.Spacing.md)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 }
@@ -504,5 +507,30 @@ struct SearchView: View {
     private func formatDuration(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// A self-animating loading spinner that keeps spinning for as long as it is on
+/// screen. Unlike SwiftUI's `ProgressView` (which wraps a `UIActivityIndicatorView`
+/// that stops — and thus hides — when reused inside a persistent `List` footer),
+/// this drives its own repeating `rotationEffect`, so it stays visible on every
+/// page of infinite scroll, not just the first.
+private struct InlineSpinner: View {
+    var color: Color
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .frame(width: 20, height: 20)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .onAppear {
+                spinning = false
+                withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
+                    spinning = true
+                }
+            }
+            .accessibilityLabel("Loading more results")
     }
 }
