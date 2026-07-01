@@ -131,6 +131,22 @@ final class PlayerManagerTests: XCTestCase {
         XCTAssertTrue(player.queue.isEmpty)
     }
 
+    func test_PlaybackRateDefaultsToOne() {
+        XCTAssertEqual(player.playbackRate, 1.0)
+    }
+
+    func test_SetPlaybackRateUpdatesValue() {
+        player.setPlaybackRate(1.5)
+        XCTAssertEqual(player.playbackRate, 1.5)
+    }
+
+    func test_SetPlaybackRateClampsToSupportedRange() {
+        player.setPlaybackRate(5.0)
+        XCTAssertEqual(player.playbackRate, 2.0)
+        player.setPlaybackRate(0.1)
+        XCTAssertEqual(player.playbackRate, 0.5)
+    }
+
     // MARK: - Play generation (3)
 
     func test_PlayBumpsGeneration() {

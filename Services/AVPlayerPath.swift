@@ -82,10 +82,16 @@ final class AVPlayerPath {
         let asset = AVURLAsset(url: url)
         playerItem = AVPlayerItem(asset: asset)
         playerItem?.preferredForwardBufferDuration = 10
+        // Preserve pitch when playing at a non-1x speed (otherwise fast/slow
+        // playback sounds chipmunk/detuned).
+        playerItem?.audioTimePitchAlgorithm = .timeDomain
         avPlayer = AVPlayer(playerItem: playerItem)
         // Let AVPlayer hold playback until it has enough buffer to avoid
         // immediate stalls on a slow start, rather than starting and dying.
         avPlayer?.automaticallyWaitsToMinimizeStalling = true
+        // play() begins at defaultRate (iOS 16+), so the chosen speed carries
+        // across tracks without touching every play() call site.
+        avPlayer?.defaultRate = playbackRate
 
         rateObserver = avPlayer?.observe(\.rate, options: [.new]) { [weak self] avPlayer, _ in
             log.notice("rate changed -> \(avPlayer.rate, privacy: .public)")
@@ -234,6 +240,20 @@ final class AVPlayerPath {
 
     func pause() {
         avPlayer?.pause()
+    }
+
+    /// Selected playback speed, applied to the current and all future items.
+    private(set) var playbackRate: Float = 1.0
+
+    /// Change the playback speed. Updates `defaultRate` so `play()` resumes at
+    /// the chosen speed, and applies it live if currently playing. When paused,
+    /// only the default is updated so we don't inadvertently start playback.
+    func setPlaybackRate(_ rate: Float) {
+        playbackRate = rate
+        avPlayer?.defaultRate = rate
+        if let player = avPlayer, player.rate > 0 {
+            player.rate = rate
+        }
     }
 
     // MARK: - End-of-item observer

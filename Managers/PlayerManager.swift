@@ -38,6 +38,13 @@ final class PlayerManager: NSObject, ObservableObject {
     /// state, unlike the per-tick position.
     @Published var isRebuffering = false
 
+    /// Current playback speed multiplier (session-scoped; resets to 1x on
+    /// launch). Applied to the AVPlayer via `defaultRate`, pitch-preserved.
+    @Published private(set) var playbackRate: Float = 1.0
+
+    /// Available speed presets shown in the player's speed menu.
+    static let playbackRatePresets: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+
     /// High-frequency playback position + track length, split into its own
     /// observable so the 4 Hz time observer re-renders only the scrubber, not
     /// every view that observes `PlayerManager`. `currentTime` / `duration`
@@ -448,6 +455,16 @@ final class PlayerManager: NSObject, ObservableObject {
         currentTime = time
         nowPlaying.updateNowPlaying()
         schedulePlaybackSave()
+    }
+
+    /// Set the playback speed (clamped to the supported range). Applies live to
+    /// the AVPlayer and updates Now Playing so the lock-screen clock stays in
+    /// sync at non-1x rates.
+    func setPlaybackRate(_ rate: Float) {
+        let clamped = min(max(rate, 0.5), 2.0)
+        playbackRate = clamped
+        avPlayerPath.setPlaybackRate(clamped)
+        nowPlaying.updateNowPlaying()
     }
 
     func applyEQPreset(_ gains: [Float]) {
