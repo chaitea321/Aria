@@ -1,5 +1,6 @@
 import AVFoundation
 import AudioToolbox
+import os
 
 /// DSP core for the streaming EQ: hosts Apple's N-Band EQ AudioUnit and renders
 /// audio buffers through it. This is deliberately independent of
@@ -11,16 +12,22 @@ import AudioToolbox
 /// pulls that source through the AU. The AU's input render callback copies the
 /// stashed source into the unit; the unit writes the EQ'd result to `output`.
 ///
-/// Threading: `process` and the render callback run on the audio render thread.
-/// They must not allocate or lock. Band/bypass changes come from the UI thread —
-/// `AudioUnitSetParameter` / `kAudioUnitProperty_BypassEffect` are documented as
-/// safe to call concurrently with rendering.
+/// Threading: `process` and the render callback run on the audio render thread,
+/// while band/bypass changes and `prepare`/`unprepare` come from the UI thread.
+/// Parameter-setting is safe to run concurrently with rendering, but *disposing*
+/// the AudioUnit is not: `unprepare()` (reached off-main from the tap's teardown
+/// callback) can free the unit while `process`/`setParam` hold a raw pointer to
+/// it → use-after-free. All access to `au` is therefore serialised behind
+/// `lock`; the critical sections are single AudioUnit calls, short enough for an
+/// unfair lock on the render thread.
 final class AudioEQ {
     static let bandCount = 10
 
     enum EQError: Error { case componentNotFound, osstatus(OSStatus) }
 
     private var au: AudioUnit?
+    /// Guards the lifetime of `au` so a dispose can't race a set/render call.
+    private let lock = OSAllocatedUnfairLock()
 
     /// Source buffers for the in-flight `process` call, read by the AU's input
     /// render callback. Only touched on the render thread.
@@ -40,54 +47,60 @@ final class AudioEQ {
             componentFlags: 0, componentFlagsMask: 0)
         guard let comp = AudioComponentFindNext(nil, &desc) else { throw EQError.componentNotFound }
 
-        var unit: AudioUnit?
-        try check(AudioComponentInstanceNew(comp, &unit))
-        guard let au = unit else { throw EQError.componentNotFound }
-        self.au = au
+        try lock.withLockUnchecked {
+            var unit: AudioUnit?
+            try check(AudioComponentInstanceNew(comp, &unit))
+            guard let au = unit else { throw EQError.componentNotFound }
+            self.au = au
 
-        var bands = UInt32(Self.bandCount)
-        try check(AudioUnitSetProperty(au, kAUNBandEQProperty_NumberOfBands,
-                                       kAudioUnitScope_Global, 0,
-                                       &bands, UInt32(MemoryLayout<UInt32>.size)))
+            var bands = UInt32(Self.bandCount)
+            try check(AudioUnitSetProperty(au, kAUNBandEQProperty_NumberOfBands,
+                                           kAudioUnitScope_Global, 0,
+                                           &bands, UInt32(MemoryLayout<UInt32>.size)))
 
-        var fmt = format
-        let fmtSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        try check(AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
-                                       kAudioUnitScope_Input, 0, &fmt, fmtSize))
-        try check(AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
-                                       kAudioUnitScope_Output, 0, &fmt, fmtSize))
+            var fmt = format
+            let fmtSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+            try check(AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
+                                           kAudioUnitScope_Input, 0, &fmt, fmtSize))
+            try check(AudioUnitSetProperty(au, kAudioUnitProperty_StreamFormat,
+                                           kAudioUnitScope_Output, 0, &fmt, fmtSize))
 
-        // Render slices can be large; raise the cap or AudioUnitRender fails
-        // with kAudioUnitErr_TooManyFramesToProcess. Must be set before init.
-        var maxFrames = UInt32(8192)
-        try check(AudioUnitSetProperty(au, kAudioUnitProperty_MaximumFramesPerSlice,
-                                       kAudioUnitScope_Global, 0,
-                                       &maxFrames, UInt32(MemoryLayout<UInt32>.size)))
+            // Render slices can be large; raise the cap or AudioUnitRender fails
+            // with kAudioUnitErr_TooManyFramesToProcess. Must be set before init.
+            var maxFrames = UInt32(8192)
+            try check(AudioUnitSetProperty(au, kAudioUnitProperty_MaximumFramesPerSlice,
+                                           kAudioUnitScope_Global, 0,
+                                           &maxFrames, UInt32(MemoryLayout<UInt32>.size)))
 
-        for i in 0..<Self.bandCount {
-            let band = AudioUnitParameterID(i)
-            setParam(kAUNBandEQParam_Frequency + band, frequencies[i])
-            setParam(kAUNBandEQParam_Gain + band, 0)
-            setParam(kAUNBandEQParam_BypassBand + band, 0)  // 0 = band active
+            // Use the lock-free helper on the local `au` — the public setParam
+            // would re-acquire this (non-recursive) lock and deadlock.
+            for i in 0..<Self.bandCount {
+                let band = AudioUnitParameterID(i)
+                applyParam(au, kAUNBandEQParam_Frequency + band, frequencies[i])
+                applyParam(au, kAUNBandEQParam_Gain + band, 0)
+                applyParam(au, kAUNBandEQParam_BypassBand + band, 0)  // 0 = band active
+            }
+
+            var cb = AURenderCallbackStruct(
+                inputProc: audioEQRenderInput,
+                inputProcRefCon: Unmanaged.passUnretained(self).toOpaque())
+            try check(AudioUnitSetProperty(au, kAudioUnitProperty_SetRenderCallback,
+                                           kAudioUnitScope_Input, 0,
+                                           &cb, UInt32(MemoryLayout<AURenderCallbackStruct>.size)))
+
+            try check(AudioUnitInitialize(au))
         }
-
-        var cb = AURenderCallbackStruct(
-            inputProc: audioEQRenderInput,
-            inputProcRefCon: Unmanaged.passUnretained(self).toOpaque())
-        try check(AudioUnitSetProperty(au, kAudioUnitProperty_SetRenderCallback,
-                                       kAudioUnitScope_Input, 0,
-                                       &cb, UInt32(MemoryLayout<AURenderCallbackStruct>.size)))
-
-        try check(AudioUnitInitialize(au))
     }
 
     func unprepare() {
-        if let au {
-            AudioUnitUninitialize(au)
-            AudioComponentInstanceDispose(au)
+        lock.withLockUnchecked {
+            if let au = self.au {
+                AudioUnitUninitialize(au)
+                AudioComponentInstanceDispose(au)
+            }
+            self.au = nil
+            pendingSource = nil
         }
-        au = nil
-        pendingSource = nil
     }
 
     deinit { unprepare() }
@@ -102,11 +115,13 @@ final class AudioEQ {
 
     /// Bypasses the whole EQ (audio passes through unchanged) without detaching.
     func setBypass(_ bypass: Bool) {
-        guard let au else { return }
-        var v = UInt32(bypass ? 1 : 0)
-        AudioUnitSetProperty(au, kAudioUnitProperty_BypassEffect,
-                             kAudioUnitScope_Global, 0,
-                             &v, UInt32(MemoryLayout<UInt32>.size))
+        lock.withLockUnchecked {
+            guard let au = self.au else { return }
+            var v = UInt32(bypass ? 1 : 0)
+            AudioUnitSetProperty(au, kAudioUnitProperty_BypassEffect,
+                                 kAudioUnitScope_Global, 0,
+                                 &v, UInt32(MemoryLayout<UInt32>.size))
+        }
     }
 
     // MARK: - Render (audio thread)
@@ -116,12 +131,17 @@ final class AudioEQ {
                  output: UnsafeMutablePointer<AudioBufferList>,
                  frames: AVAudioFrameCount,
                  timeStamp: AudioTimeStamp) -> OSStatus {
-        guard let au else { return kAudioUnitErr_Uninitialized }
-        pendingSource = source
-        defer { pendingSource = nil }
-        var flags = AudioUnitRenderActionFlags()
-        var ts = timeStamp
-        return AudioUnitRender(au, &flags, &ts, 0, frames, output)
+        // Held across AudioUnitRender so unprepare() can't dispose `au` mid-render.
+        // AudioUnitRender invokes fillInput synchronously on this same thread and
+        // fillInput takes no lock, so there's no re-entrancy/deadlock.
+        lock.withLockUnchecked {
+            guard let au = self.au else { return kAudioUnitErr_Uninitialized }
+            pendingSource = source
+            defer { pendingSource = nil }
+            var flags = AudioUnitRenderActionFlags()
+            var ts = timeStamp
+            return AudioUnitRender(au, &flags, &ts, 0, frames, output)
+        }
     }
 
     /// Called by the AU's input render callback to fill `ioData` with the source
@@ -143,8 +163,17 @@ final class AudioEQ {
 
     // MARK: - Helpers
 
+    /// Locked public path: read `au` and set a parameter under `lock`.
     private func setParam(_ id: AudioUnitParameterID, _ value: Float) {
-        guard let au else { return }
+        lock.withLockUnchecked {
+            guard let au = self.au else { return }
+            applyParam(au, id, value)
+        }
+    }
+
+    /// Lock-free parameter set on a caller-supplied unit. The caller must already
+    /// hold `lock` (or own `au` exclusively, as `prepare` does during setup).
+    private func applyParam(_ au: AudioUnit, _ id: AudioUnitParameterID, _ value: Float) {
         AudioUnitSetParameter(au, id, kAudioUnitScope_Global, 0,
                               AudioUnitParameterValue(value), 0)
     }
