@@ -43,4 +43,21 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.object(forKey: sleepKey),
                      "sleep timer must not be persisted")
     }
+
+    /// The backend URL/key overrides round-trip through save() → a fresh
+    /// manager (i.e. an app relaunch).
+    func test_backendOverrides_persistAndReload() {
+        defer {
+            UserDefaults.standard.removeObject(forKey: BackendConfig.urlOverrideKey)
+            UserDefaults.standard.removeObject(forKey: BackendConfig.apiKeyOverrideKey)
+        }
+        let settings = SettingsManager()
+        settings.backendURLOverride = "https://music.example.com"
+        settings.backendAPIKeyOverride = "sekrit"
+        settings.save()
+
+        let reloaded = SettingsManager()
+        XCTAssertEqual(reloaded.backendURLOverride, "https://music.example.com")
+        XCTAssertEqual(reloaded.backendAPIKeyOverride, "sekrit")
+    }
 }

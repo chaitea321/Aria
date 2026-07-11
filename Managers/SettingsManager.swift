@@ -35,6 +35,11 @@ final class SettingsManager: ObservableObject {
     @Published var selectedThemeID: String = "blue"
     @Published var sleepTimer: SleepTimerDuration = .off
     @Published private(set) var searchHistory: [String] = []
+    /// Backend server URL / API key overrides (More → Backend). Persisted
+    /// under the `BackendConfig` keys so URL resolution sees them; empty
+    /// string = no override.
+    @Published var backendURLOverride: String = ""
+    @Published var backendAPIKeyOverride: String = ""
 
     private let maxHistoryItems = 20
     private let defaults = UserDefaults.standard
@@ -74,6 +79,8 @@ final class SettingsManager: ObservableObject {
         if let history = defaults.stringArray(forKey: "search_history") {
             searchHistory = history
         }
+        backendURLOverride = defaults.string(forKey: BackendConfig.urlOverrideKey) ?? ""
+        backendAPIKeyOverride = defaults.string(forKey: BackendConfig.apiKeyOverrideKey) ?? ""
     }
 
     func save() {
@@ -82,6 +89,8 @@ final class SettingsManager: ObservableObject {
         defaults.set(selectedThemeID, forKey: "theme_id")
         // Sleep timer is ephemeral and deliberately not persisted (see load()).
         defaults.set(searchHistory, forKey: "search_history")
+        defaults.set(backendURLOverride, forKey: BackendConfig.urlOverrideKey)
+        defaults.set(backendAPIKeyOverride, forKey: BackendConfig.apiKeyOverrideKey)
     }
 
     func setTheme(_ id: String) {

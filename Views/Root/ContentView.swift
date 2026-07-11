@@ -28,8 +28,15 @@ struct ContentView: View {
         }
     }
 
+    /// Search (YouTube streaming) needs a configured backend; without one the
+    /// app runs as a local-files player and the Search tab hides entirely.
+    private var searchAvailable: Bool { BackendConfig.isConfigured }
+
     init(initialTab: AppTab = .favorites) {
-        _selectedTab = State(initialValue: initialTab)
+        // A start tab pointing at the (hidden) Search tab falls back to
+        // Library when no backend is configured.
+        let tab = (initialTab == .search && !BackendConfig.isConfigured) ? AppTab.library : initialTab
+        _selectedTab = State(initialValue: tab)
     }
 
     var body: some View {
@@ -80,7 +87,13 @@ struct ContentView: View {
             }
         }
         .onChange(of: playerManager.playerError) { error in
-            guard case .streamFailed(let msg) = error else { return }
+            let message: String?
+            switch error {
+            case .streamFailed(let msg): message = msg
+            case .trackMissing: message = "That file is missing — re-import it from the Library tab."
+            case nil: message = nil
+            }
+            guard let msg = message else { return }
             withAnimation(.spring(response: 0.3)) { errorBanner = msg }
             Task {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -92,10 +105,14 @@ struct ContentView: View {
         .onChange(of: settingsManager.defaultStartTab) { newValue in
             switch newValue {
             case .playlists: selectedTab = .playlists
-            case .search:    selectedTab = .search
+            case .search:    selectedTab = searchAvailable ? .search : .library
             case .more:      selectedTab = .more
             case .favorites: selectedTab = .favorites
             }
+        }
+        .onChange(of: settingsManager.backendURLOverride) { _ in
+            // Clearing the server while on Search would strand a hidden tab.
+            if !searchAvailable, selectedTab == .search { selectedTab = .library }
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .background || newPhase == .inactive {
@@ -159,7 +176,9 @@ struct ContentView: View {
             tabBarButton(tab: .favorites, icon: "heart", label: "Favorites")
             tabBarButton(tab: .playlists, icon: "music.note.list", label: "Playlists")
             tabBarButton(tab: .library, icon: "folder", label: "Library")
-            tabBarButton(tab: .search, icon: "magnifyingglass", label: "Search")
+            if searchAvailable {
+                tabBarButton(tab: .search, icon: "magnifyingglass", label: "Search")
+            }
             tabBarButton(tab: .more, icon: "ellipsis", label: "More")
         }
         .padding(.horizontal, 4)
