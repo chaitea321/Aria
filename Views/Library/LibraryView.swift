@@ -7,6 +7,7 @@ struct LibraryView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var playlistsManager: PlaylistsManager
     @EnvironmentObject private var nav: NavigationCoordinator
+    @EnvironmentObject private var downloadManager: DownloadManager
 
     @State private var isImporting = false
     @State private var importError: String?
@@ -41,12 +42,14 @@ struct LibraryView: View {
             ZStack {
                 tokens.background.ignoresSafeArea()
 
-                if vm.tracks.isEmpty {
+                if vm.tracks.isEmpty && downloadManager.records.isEmpty {
                     emptyState
-                } else if vm.filteredAndSortedTracks.isEmpty {
+                } else if !vm.searchText.isEmpty
+                            && vm.filteredAndSortedTracks.isEmpty
+                            && filteredDownloads.isEmpty {
                     noSearchResults
                 } else {
-                    trackList
+                    combinedList
                 }
             }
             .navigationTitle("Library")
@@ -221,25 +224,96 @@ struct LibraryView: View {
         }
     }
 
-    private var trackList: some View {
+    private var combinedList: some View {
         ScrollView {
             LazyVStack(spacing: 16) {
-                ForEach(vm.sections) { section in
-                    LibrarySectionView(
-                        section: section,
-                        showHeader: vm.groupBy != .none,
-                        tokens: tokens,
-                        isCurrentTrack: isCurrentTrack,
-                        isPlaying: playerManager.isPlaying,
-                        onPlay: { playOrRepair($0) },
-                        onAddToPlaylist: { addToPlaylistTrack = $0 },
-                        onDelete: { libraryManager.remove($0) }
-                    )
+                if !vm.filteredAndSortedTracks.isEmpty {
+                    ForEach(vm.sections) { section in
+                        LibrarySectionView(
+                            section: section,
+                            showHeader: vm.groupBy != .none,
+                            tokens: tokens,
+                            isCurrentTrack: isCurrentTrack,
+                            isPlaying: playerManager.isPlaying,
+                            onPlay: { playOrRepair($0) },
+                            onAddToPlaylist: { addToPlaylistTrack = $0 },
+                            onDelete: { libraryManager.remove($0) }
+                        )
+                    }
+                }
+                if !filteredDownloads.isEmpty {
+                    downloadsSection
                 }
             }
             .padding(.vertical)
         }
         .background(tokens.background)
+    }
+
+    // MARK: - YouTube Downloads section
+
+    /// Downloaded tracks, filtered by the shared search field (title/artist).
+    private var filteredDownloads: [DownloadRecord] {
+        let q = vm.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return downloadManager.records }
+        return downloadManager.records.filter {
+            $0.title.range(of: q, options: .caseInsensitive) != nil
+                || $0.artist.range(of: q, options: .caseInsensitive) != nil
+        }
+    }
+
+    private var downloadsSection: some View {
+        VStack(alignment: .leading, spacing: DS.Spacing.sm) {
+            SectionLabel(title: "YouTube Downloads", tokens: tokens)
+                .padding(.horizontal, DS.Spacing.lg)
+            ForEach(filteredDownloads) { rec in
+                downloadRow(rec)
+            }
+        }
+    }
+
+    private func downloadRow(_ rec: DownloadRecord) -> some View {
+        Button {
+            let tracks = filteredDownloads.map(\.asTrack)
+            let idx = filteredDownloads.firstIndex { $0.videoID == rec.videoID } ?? 0
+            playerManager.playSlice(tracks, startIndex: idx)
+        } label: {
+            HStack(spacing: DS.Spacing.sm) {
+                TrackThumbnail(url: rec.thumbnailURL, size: 48, cornerRadius: DS.Radius.sm, tokens: tokens)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rec.title)
+                        .font(.body)
+                        .lineLimit(1)
+                        .foregroundColor(playerManager.currentTrack?.id == rec.videoID ? tokens.accent : tokens.textPrimary)
+                    HStack(spacing: 6) {
+                        Text(rec.artist).lineLimit(1)
+                        Text("· \(Self.formatBytes(rec.sizeBytes))")
+                    }
+                    .font(.caption)
+                    .foregroundColor(tokens.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundColor(tokens.textSecondary)
+                    .imageScale(.small)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, DS.Spacing.lg)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                downloadManager.remove(rec.videoID)
+            } label: {
+                Label("Remove Download", systemImage: "trash")
+            }
+        }
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     @ViewBuilder
