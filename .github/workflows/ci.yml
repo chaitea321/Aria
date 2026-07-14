@@ -31,14 +31,23 @@ jobs:
         run: python -m pytest tests/ -q
 
   ios:
-    name: iOS (xcodebuild test)
-    runs-on: macos-15
+    # DIAGNOSTIC RUN — not intended to merge as-is.
+    #
+    # AriaTests aborts on macos-15 (Xcode 26.3) with a malloc "pointer being
+    # freed was not allocated" at the *first* DebouncerTests case, freeing the
+    # same address (0x262543f40) in every process — including relaunches that
+    # never run AudioEQTests. The suite passes on Xcode 26.5, which is the
+    # toolchain the project actually targets (CLAUDE.md). This matrix runs both
+    # toolchains and prints the crash backtrace, so we can tell a real invalid
+    # free in our code apart from a toolchain bug.
+    name: iOS (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
     steps:
       - uses: actions/checkout@v4
-      # The project targets Xcode 26.5+. GitHub-hosted runners may lag that
-      # release; pick the newest Xcode the image actually has. If the image is
-      # too old for the project, bump the runner label (e.g. macos-26) once
-      # available, or adjust the simulator name/OS below to match `simctl list`.
       - name: Select newest available Xcode
         run: |
           latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
@@ -55,3 +64,48 @@ jobs:
             -project Aria.xcodeproj \
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
             CODE_SIGNING_ALLOWED=NO
+
+      # The malloc abort leaves a crash report, but xcodebuild's log carries no
+      # backtrace. Print the triggered thread's frames so whatever calls free()
+      # is named rather than guessed at.
+      - name: Dump crash backtraces
+        if: failure()
+        run: |
+          cat > /tmp/dump_crash.py <<'PY'
+          import glob, json, os, sys
+
+          reports = sorted(glob.glob(os.path.expanduser("~/Library/Logs/DiagnosticReports/*.ips")))
+          if not reports:
+              print("no .ips crash reports found")
+              sys.exit(0)
+
+          for path in reports:
+              raw = open(path, encoding="utf-8", errors="replace").read()
+              head, _, body = raw.partition("\n")
+              try:
+                  meta = json.loads(head)
+                  crash = json.loads(body)
+              except Exception:
+                  print("===== %s (unparsed)\n%s" % (path, raw[:3000]))
+                  continue
+
+              name = meta.get("app_name") or meta.get("process") or "?"
+              if "Aria" not in name:
+                  continue
+
+              print("===== %s" % path)
+              print("process    :", name)
+              print("exception  :", crash.get("exception"))
+              print("termination:", crash.get("termination"))
+
+              images = crash.get("usedImages", [])
+              for thread in crash.get("threads", []):
+                  if not thread.get("triggered"):
+                      continue
+                  print("--- TRIGGERED THREAD:", thread.get("name") or thread.get("queue") or "?")
+                  for frame in thread.get("frames", []):
+                      idx = frame.get("imageIndex", -1)
+                      img = images[idx].get("name", "?") if 0 <= idx < len(images) else "?"
+                      print("    %-32s %s +%s" % (img, frame.get("symbol", ""), frame.get("imageOffset")))
+          PY
+          python3 /tmp/dump_crash.py
