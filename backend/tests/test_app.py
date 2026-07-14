@@ -388,9 +388,23 @@ def test_detect_node_falls_back_to_which(monkeypatch):
     assert appmod._detect_node_path() == "/opt/homebrew/bin/node"
 
 
+def test_detect_node_falls_back_to_candidate_paths(monkeypatch, tmp_path):
+    """With nothing on NODE_PATH or PATH, the common install locations are probed."""
+    fake = tmp_path / "node"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.delenv("NODE_PATH", raising=False)
+    monkeypatch.setattr(appmod.shutil, "which", lambda b: None)
+    monkeypatch.setattr(appmod, "_NODE_CANDIDATES", ("/nonexistent/node", str(fake)))
+    assert appmod._detect_node_path() == str(fake)
+
+
 def test_detect_node_returns_none_when_absent(monkeypatch):
     monkeypatch.delenv("NODE_PATH", raising=False)
     monkeypatch.setattr(appmod.shutil, "which", lambda b: None)
+    # Stub the candidate paths too: otherwise this asserts against whatever the
+    # host has installed. CI runners ship node at /usr/local/bin/node, so probing
+    # the real filesystem made the test pass locally and fail in CI.
+    monkeypatch.setattr(appmod, "_NODE_CANDIDATES", ())
     assert appmod._detect_node_path() is None
 
 
@@ -444,6 +458,30 @@ def test_request_id_header_present(client):
 def test_resolve_returns_502_when_unresolvable(client, monkeypatch):
     monkeypatch.setattr(appmod, "_resolve_sync", lambda vid: {"url": None})
     assert client.get("/api/resolve", params={"video_id": "dQw4w9WgXcQ"}).status_code == 502
+
+
+def test_resolve_caches_repeat_calls(client, monkeypatch):
+    calls = {"n": 0}
+
+    def fake(video_id):
+        calls["n"] += 1
+        return {"url": "https://googlevideo.example/audio", "duration": 100}
+
+    monkeypatch.setattr(appmod, "_resolve_sync", fake)
+    r1 = client.get("/api/resolve", params={"video_id": "dQw4w9WgXcQ"})
+    r2 = client.get("/api/resolve", params={"video_id": "dQw4w9WgXcQ"})
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.json()["url"] == r2.json()["url"]
+    assert calls["n"] == 1  # second call served from cache — no re-extraction
+    # a different id still resolves
+    client.get("/api/resolve", params={"video_id": "abcdefghijk"})
+    assert calls["n"] == 2
+
+
+def test_resolve_does_not_cache_failures(client, monkeypatch):
+    monkeypatch.setattr(appmod, "_resolve_sync", lambda vid: {"url": None})
+    assert client.get("/api/resolve", params={"video_id": "dQw4w9WgXcQ"}).status_code == 502
+    assert "dQw4w9WgXcQ" not in appmod._resolve_cache
 
 
 def test_radio_filters_seed_and_returns_list(client, monkeypatch):

@@ -23,7 +23,7 @@ actor StreamPrefetcher: StreamResolving {
         let at: Date
     }
     private var cache: [String: Entry] = [:]
-    private var inFlight: (id: String, task: Task<Void, Never>)?
+    private var inFlight: [String: Task<Void, Never>] = [:]
 
     init(
         resolver: StreamResolving,
@@ -55,12 +55,10 @@ actor StreamPrefetcher: StreamResolving {
     }
 
     /// Fire-and-forget: resolve `videoID` and stash it for the next
-    /// `resolve(for:)`. Cancels any prefetch for a different id so only the
-    /// one upcoming track is ever warmed.
+    /// `resolve(for:)`. Additive — several tracks can be warmed at once
+    /// (see the batch overload); a track already cached or in flight is skipped.
     func prefetch(_ videoID: String) {
-        if cache[videoID] != nil { return }
-        if let inFlight, inFlight.id == videoID { return }
-        inFlight?.task.cancel()
+        if cache[videoID] != nil || inFlight[videoID] != nil { return }
         let task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -70,27 +68,43 @@ actor StreamPrefetcher: StreamResolving {
                 log.debug("prefetch miss \(videoID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
-        inFlight = (videoID, task)
+        inFlight[videoID] = task
     }
 
-    /// Drops any in-flight prefetch and cached entries (e.g. when the queue is
+    /// Warm the next N upcoming tracks (multi-deep look-ahead), so skipping
+    /// several ahead is fast too — not just the immediate next track. Tracks no
+    /// longer in the upcoming set (the queue moved on) are cancelled/dropped so
+    /// the warm set tracks the queue and memory stays bounded.
+    func prefetch(_ videoIDs: [String]) {
+        let keep = Set(videoIDs)
+        for id in inFlight.keys where !keep.contains(id) {
+            inFlight[id]?.cancel()
+            inFlight[id] = nil
+        }
+        for id in cache.keys where !keep.contains(id) {
+            cache[id] = nil
+        }
+        for id in videoIDs { prefetch(id) }
+    }
+
+    /// Drops all in-flight prefetches and cached entries (e.g. when the queue is
     /// cleared or replaced).
     func cancelPrefetch() {
-        inFlight?.task.cancel()
-        inFlight = nil
+        for task in inFlight.values { task.cancel() }
+        inFlight.removeAll()
         cache.removeAll()
     }
 
-    /// Test hook: await any in-flight prefetch so tests can assert against a
+    /// Test hook: await all in-flight prefetches so tests can assert against a
     /// settled cache deterministically. No-op in production.
     func waitForPrefetch() async {
-        await inFlight?.task.value
+        for task in Array(inFlight.values) { await task.value }
     }
 
     private func store(_ stream: ResolvedStream, for videoID: String) {
+        inFlight[videoID] = nil
         if Task.isCancelled { return }
         cache[videoID] = Entry(stream: stream, at: now())
-        if inFlight?.id == videoID { inFlight = nil }
         log.notice("prefetched \(videoID, privacy: .public)")
     }
 }

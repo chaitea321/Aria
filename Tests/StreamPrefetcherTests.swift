@@ -82,4 +82,36 @@ final class StreamPrefetcherTests: XCTestCase {
         _ = try await prefetcher.resolve(for: "different")
         XCTAssertEqual(resolver.resolveCount, 2, "a different id must not be served from abc's cache")
     }
+
+    func test_batchPrefetch_warmsAllUpcoming() async throws {
+        let resolver = CountingResolver()
+        let prefetcher = StreamPrefetcher(resolver: resolver)
+
+        await prefetcher.prefetch(["a", "b", "c"])
+        await prefetcher.waitForPrefetch()
+        XCTAssertEqual(resolver.resolveCount, 3, "all three upcoming tracks should be warmed")
+
+        _ = try await prefetcher.resolve(for: "a")
+        _ = try await prefetcher.resolve(for: "b")
+        _ = try await prefetcher.resolve(for: "c")
+        XCTAssertEqual(resolver.resolveCount, 3, "all three should be served from cache")
+    }
+
+    func test_batchPrefetch_dropsEntriesNoLongerUpcoming() async throws {
+        let resolver = CountingResolver()
+        let prefetcher = StreamPrefetcher(resolver: resolver)
+
+        await prefetcher.prefetch(["a", "b", "c"])
+        await prefetcher.waitForPrefetch()
+
+        // Queue moved on to [c, d]: a and b drop, c stays warm, d is added.
+        await prefetcher.prefetch(["c", "d"])
+        await prefetcher.waitForPrefetch()
+        XCTAssertEqual(resolver.resolveCount, 4, "only d is newly resolved; c stayed cached")
+
+        _ = try await prefetcher.resolve(for: "a")  // dropped → re-resolves
+        XCTAssertEqual(resolver.resolveCount, 5)
+        _ = try await prefetcher.resolve(for: "c")  // still warm
+        XCTAssertEqual(resolver.resolveCount, 5)
+    }
 }
