@@ -32,26 +32,111 @@ jobs:
 
   ios:
     name: iOS (xcodebuild test)
-    runs-on: macos-15
+    # macos-15 ships Xcode 26.3, below the Xcode 26.5+ this project targets
+    # (CLAUDE.md). On 26.3, the back-deployed isolated-deinit shim that Swift
+    # links into the app — Debouncer is implicitly @MainActor via
+    # SWIFT_DEFAULT_ACTOR_ISOLATION, so its deinit is actor-isolated, and the
+    # iOS 16.6 deploy target forces back-deployment — invalid-frees on dealloc
+    # and aborts the test host ("pointer being freed was not allocated"). The
+    # bug is in that shim, not in our code; a supported toolchain doesn't hit it.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      # The project targets Xcode 26.5+. GitHub-hosted runners may lag that
-      # release; pick the newest Xcode the image actually has. If the image is
-      # too old for the project, bump the runner label (e.g. macos-26) once
-      # available, or adjust the simulator name/OS below to match `simctl list`.
       - name: Select newest available Xcode
         run: |
           latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
           echo "Using ${latest:-default Xcode}"
           [ -n "$latest" ] && sudo xcode-select -s "$latest" || true
           xcodebuild -version
-      - name: List iPhone simulators
-        run: xcrun simctl list devices available | grep -i iphone || true
+
+      # Runner images rotate which simulators they ship (macos-26 has no
+      # "iPhone 16", which is what a hardcoded destination died on). Resolve a
+      # real device UDID from simctl instead so this survives image updates.
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+
+          runtimes = json.load(sys.stdin)["devices"]
+
+          def ios_version(runtime):
+              tail = runtime.rsplit(".", 1)[-1]          # com.apple...iOS-26-5 -> iOS-26-5
+              return [int(p) for p in tail.split("-") if p.isdigit()]
+
+          best = None
+          for runtime, devices in runtimes.items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  name = device["name"]
+                  if not device.get("isAvailable") or not name.startswith("iPhone"):
+                      continue
+                  # Newest iOS, then the highest plain numbered model ("iPhone 17"
+                  # over "iPhone 17 Pro"/"iPhone Air"), so the pick is stable.
+                  model = re.fullmatch(r"iPhone (\d+)", name)
+                  key = (ios_version(runtime), bool(model), int(model.group(1)) if model else 0, name)
+                  if best is None or key > best[0]:
+                      best = (key, device)
+
+          if best is None:
+              sys.exit("no available iPhone simulator on this runner image")
+          print(best[1]["udid"])
+          ')
+          echo "Selected simulator: $(xcrun simctl list devices | grep "$udid" || echo "$udid")"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
       - name: Run AriaTests
         run: |
           set -o pipefail
           xcodebuild test \
             -scheme AriaTests \
             -project Aria.xcodeproj \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
             CODE_SIGNING_ALLOWED=NO
+
+      # A malloc abort kills the test host with no backtrace in xcodebuild's
+      # log, which made the crash above look like it came from whichever test
+      # happened to be running. Print the crashing thread's frames so the next
+      # one names its own culprit.
+      - name: Dump crash backtraces
+        if: failure()
+        run: |
+          cat > /tmp/dump_crash.py <<'PY'
+          import glob, json, os, sys
+
+          reports = sorted(glob.glob(os.path.expanduser("~/Library/Logs/DiagnosticReports/*.ips")))
+          if not reports:
+              print("no .ips crash reports found")
+              sys.exit(0)
+
+          for path in reports:
+              raw = open(path, encoding="utf-8", errors="replace").read()
+              head, _, body = raw.partition("\n")
+              try:
+                  meta = json.loads(head)
+                  crash = json.loads(body)
+              except Exception:
+                  print("===== %s (unparsed)\n%s" % (path, raw[:3000]))
+                  continue
+
+              name = meta.get("app_name") or meta.get("process") or "?"
+              if "Aria" not in name:
+                  continue
+
+              print("===== %s" % path)
+              print("process    :", name)
+              print("exception  :", crash.get("exception"))
+              print("termination:", crash.get("termination"))
+
+              images = crash.get("usedImages", [])
+              for thread in crash.get("threads", []):
+                  if not thread.get("triggered"):
+                      continue
+                  print("--- TRIGGERED THREAD:", thread.get("name") or thread.get("queue") or "?")
+                  for frame in thread.get("frames", []):
+                      idx = frame.get("imageIndex", -1)
+                      img = images[idx].get("name", "?") if 0 <= idx < len(images) else "?"
+                      print("    %-32s %s +%s" % (img, frame.get("symbol", ""), frame.get("imageOffset")))
+          PY
+          python3 /tmp/dump_crash.py
