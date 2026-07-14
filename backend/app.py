@@ -101,6 +101,17 @@ _EXT_PREFERENCE = [".m4a", ".mp4", ".webm", ".ogg", ".opus"]
 _PARTIAL_SUFFIXES = (".part", ".ytdl", ".temp", ".tmp", ".download")
 
 
+# Common install locations checked when node is on neither NODE_PATH nor PATH.
+# Module-level so tests can stub it out — probing the real filesystem would
+# otherwise make node detection depend on whatever the host happens to have
+# installed (CI runners ship node at /usr/local/bin/node).
+_NODE_CANDIDATES: tuple[str, ...] = (
+    "/usr/bin/node",
+    "/usr/local/bin/node",
+    "/opt/homebrew/bin/node",
+)
+
+
 def _detect_node_path() -> Optional[str]:
     """Locate the node binary yt-dlp uses to run YouTube's player JS.
 
@@ -114,7 +125,7 @@ def _detect_node_path() -> Optional[str]:
     found = shutil.which("node")
     if found:
         return found
-    for candidate in ("/usr/bin/node", "/usr/local/bin/node", "/opt/homebrew/bin/node"):
+    for candidate in _NODE_CANDIDATES:
         if Path(candidate).is_file():
             return candidate
     return None

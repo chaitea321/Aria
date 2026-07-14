@@ -388,9 +388,23 @@ def test_detect_node_falls_back_to_which(monkeypatch):
     assert appmod._detect_node_path() == "/opt/homebrew/bin/node"
 
 
+def test_detect_node_falls_back_to_candidate_paths(monkeypatch, tmp_path):
+    """With nothing on NODE_PATH or PATH, the common install locations are probed."""
+    fake = tmp_path / "node"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.delenv("NODE_PATH", raising=False)
+    monkeypatch.setattr(appmod.shutil, "which", lambda b: None)
+    monkeypatch.setattr(appmod, "_NODE_CANDIDATES", ("/nonexistent/node", str(fake)))
+    assert appmod._detect_node_path() == str(fake)
+
+
 def test_detect_node_returns_none_when_absent(monkeypatch):
     monkeypatch.delenv("NODE_PATH", raising=False)
     monkeypatch.setattr(appmod.shutil, "which", lambda b: None)
+    # Stub the candidate paths too: otherwise this asserts against whatever the
+    # host has installed. CI runners ship node at /usr/local/bin/node, so probing
+    # the real filesystem made the test pass locally and fail in CI.
+    monkeypatch.setattr(appmod, "_NODE_CANDIDATES", ())
     assert appmod._detect_node_path() is None
 
 
