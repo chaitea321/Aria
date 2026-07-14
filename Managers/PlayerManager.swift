@@ -834,11 +834,18 @@ final class PlayerManager: NSObject, ObservableObject {
     /// Pre-resolves the next streamed track in the queue (one deep) so
     /// `playNextInQueue` starts it with no `/api/resolve` round-trip. Local
     /// files need no resolve and are skipped.
+    /// How many upcoming tracks to pre-resolve. One-deep makes a single skip
+    /// gapless; warming a few ahead makes skipping several ahead fast too.
+    private static let prefetchDepth = 3
+
     private func prefetchNext() {
-        guard let next = queue.first, next.localFileURL == nil,
-              downloads?.localURL(for: next.id) == nil, !next.id.isEmpty else { return }
-        let id = next.id
-        Task { [prefetcher] in await prefetcher?.prefetch(id) }
+        // Warm the next few streamed tracks (skip local files and ones already
+        // downloaded — those need no resolve).
+        let ids = queue.prefix(Self.prefetchDepth)
+            .filter { $0.localFileURL == nil && downloads?.localURL(for: $0.id) == nil && !$0.id.isEmpty }
+            .map(\.id)
+        guard !ids.isEmpty else { return }
+        Task { [prefetcher] in await prefetcher?.prefetch(ids) }
     }
 
     /// Best-effort, fire-and-forget ping to `/api/health` to wake a sleeping

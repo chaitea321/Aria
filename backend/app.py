@@ -272,6 +272,15 @@ _total_cache_bytes = 0
 
 _search_cache: dict[str, tuple[list[dict], float]] = {}
 _SEARCH_CACHE_TTL: float = float(os.environ.get("SEARCH_CACHE_TTL", "60"))
+
+# Resolved-stream-URL cache. /api/resolve runs a full yt-dlp extraction (incl.
+# JS-challenge solving) on every call — the dominant playback latency. The
+# signed googlevideo URLs stay valid ~6h, so caching them by video id for a
+# conservative TTL makes repeat plays + client prefetches instant. Evicted LRU
+# past RESOLVE_CACHE_MAX to bound memory.
+_resolve_cache: dict[str, tuple[dict, float]] = {}
+RESOLVE_CACHE_TTL: float = float(os.environ.get("RESOLVE_CACHE_TTL", "1800"))  # 30 min << ~6h expiry
+RESOLVE_CACHE_MAX: int = int(os.environ.get("RESOLVE_CACHE_MAX", "500"))
 # Pagination bounds. yt-dlp has no native offset, so a page is served by
 # fetching ytsearch{offset+limit} and slicing the tail; cap the total fetch so
 # a deep page can't trigger an unbounded extraction. Query length is capped to
@@ -1114,6 +1123,11 @@ async def resolve(
         raise HTTPException(status_code=400, detail="Invalid video_id format")
     _enforce_rate_limit(request, "play", RATE_LIMIT_PLAY_PER_MIN)
 
+    now = time.time()
+    cached = _resolve_cache.get(video_id)
+    if cached and now - cached[1] < RESOLVE_CACHE_TTL:
+        return cached[0]
+
     try:
         async with _ytdl_search_semaphore:
             loop = asyncio.get_running_loop()
@@ -1124,6 +1138,11 @@ async def resolve(
 
     if not result.get("url"):
         raise HTTPException(status_code=502, detail="Could not resolve stream URL")
+
+    _resolve_cache[video_id] = (result, time.time())
+    if len(_resolve_cache) > RESOLVE_CACHE_MAX:
+        for k, _ in sorted(_resolve_cache.items(), key=lambda kv: kv[1][1])[:len(_resolve_cache) - RESOLVE_CACHE_MAX]:
+            _resolve_cache.pop(k, None)
     return result
 
 
