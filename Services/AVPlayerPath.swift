@@ -79,13 +79,18 @@ final class AVPlayerPath {
 
         let asset = AVURLAsset(url: url)
         playerItem = AVPlayerItem(asset: asset)
-        playerItem?.preferredForwardBufferDuration = 10
+        // Buffer ~2s ahead (was 10) so playback starts sooner — lower
+        // time-to-first-sound. A mid-track drain is now handled gracefully by
+        // the timeControlStatus rebuffer/recovery path, so a smaller lead buffer
+        // is a safe trade for a faster start.
+        playerItem?.preferredForwardBufferDuration = 2
         // Preserve pitch when playing at a non-1x speed (otherwise fast/slow
         // playback sounds chipmunk/detuned).
         playerItem?.audioTimePitchAlgorithm = .timeDomain
         avPlayer = AVPlayer(playerItem: playerItem)
-        // Let AVPlayer hold playback until it has enough buffer to avoid
-        // immediate stalls on a slow start, rather than starting and dying.
+        // Still let AVPlayer briefly wait for a minimal buffer rather than
+        // starting and instantly stalling; the small preferredForwardBufferDuration
+        // above keeps that wait short.
         avPlayer?.automaticallyWaitsToMinimizeStalling = true
         // play() begins at defaultRate (iOS 16+), so the chosen speed carries
         // across tracks without touching every play() call site.
