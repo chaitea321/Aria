@@ -84,38 +84,25 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - Configuration
 
-    static let backendURL: String = {
-        if let url = Bundle.main.object(forInfoDictionaryKey: "ARIA_BACKEND_URL") as? String,
-           !url.isEmpty {
-            return url
-        }
-        // There is no public backend right now — the only deployment is the
-        // homelab, reached as phone → Tailscale mesh → Linux laptop over plain
-        // HTTP (WireGuard already encrypts the tunnel; a device-trusted CA for
-        // a dev backend is impractical). Both Debug and Release fall back to it,
-        // resolved from `ARIA_HOMELAB_HOST` in Info.plist, with the matching ATS
-        // exception in Aria---Music-Browser-Info.plist. The public source ships
-        // the RFC 5737 TEST-NET-1 placeholder so no real IP leaks. To point at a
-        // real HTTPS backend (e.g. TestFlight/App Store, where Tailscale isn't
-        // present), set `ARIA_BACKEND_URL` in Info.plist — it overrides this.
-        let host = Bundle.main.object(forInfoDictionaryKey: "ARIA_HOMELAB_HOST") as? String ?? "192.0.2.1"
-        return "http://\(host):8000"
-    }()
+    /// The backend base URL, resolved per-read by `BackendConfig`:
+    /// in-app Settings override → `ARIA_BACKEND_URL` Info.plist key → homelab
+    /// fallback from `ARIA_HOMELAB_HOST` (phone → Tailscale mesh → Linux
+    /// laptop over plain HTTP; the public source ships the RFC 5737 TEST-NET-1
+    /// placeholder so no real IP leaks). Computed — not frozen at launch — so
+    /// a Settings change applies to services created afterwards; long-lived
+    /// services are rebuilt via `reconfigureBackend()`.
+    nonisolated static var backendURL: String { BackendConfig.baseURL }
 
     static let eqFrequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 
     /// Bump when `PersistedPlayback`'s on-disk shape needs a migration.
     static let playbackSchemaVersion = 1
 
-    /// API key sent as `X-API-Key` on backend requests, read from the
-    /// `ARIA_API_KEY` Info.plist key. `nil`/empty means "no key configured"
-    /// (the default in the public source); the client then sends no auth
-    /// header and the backend's opt-in auth stays a no-op.
-    static let apiKey: String? = {
-        let value = Bundle.main.object(forInfoDictionaryKey: "ARIA_API_KEY") as? String
-        guard let value, !value.isEmpty else { return nil }
-        return value
-    }()
+    /// API key sent as `X-API-Key` on backend requests: in-app Settings
+    /// override → `ARIA_API_KEY` Info.plist key. `nil` means "no key
+    /// configured" (the default in the public source); the client then sends
+    /// no auth header and the backend's opt-in auth stays a no-op.
+    nonisolated static var apiKey: String? { BackendConfig.apiKey }
 
     // MARK: - Subsystems
 
@@ -216,6 +203,15 @@ final class PlayerManager: NSObject, ObservableObject {
         nowPlaying = NowPlayingService(player: self, urlSession: session)
         avPlayerPath = AVPlayerPath(player: self)
         commonInit()
+    }
+
+    /// Rebuilds the backend-facing services after the server URL / API key
+    /// changed in Settings, so the next resolve/radio call hits the new host.
+    /// (They capture `Self.backendURL` at construction; the currently playing
+    /// item keeps its already-resolved stream URL.)
+    func reconfigureBackend() {
+        prefetcher = StreamPrefetcher(resolver: StreamResolver(session: urlSession))
+        radioService = RadioService(session: urlSession)
     }
 
     /// Shared init tail: registers audio-session observers, wires the debounced

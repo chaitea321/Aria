@@ -12,6 +12,8 @@ struct MoreView: View {
     @State private var showDeletePlaylistsAlert = false
     @State private var showClearCacheAlert = false
     @State private var showClearHistoryAlert = false
+    @State private var showClearListeningHistoryAlert = false
+    @State private var connectionTest: Loadable<String> = .idle
 
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     private var tokens: DesignTokens { themeManager.tokens }
@@ -25,6 +27,7 @@ struct MoreView: View {
                     VStack(spacing: DS.Spacing.xl) {
                         heroHeader
                         settingsSection
+                        backendSection
                         advancedSection
                         extrasSection
                         versionFooter
@@ -72,6 +75,15 @@ struct MoreView: View {
             }
         } message: {
             Text("This will permanently delete all playlists. This action cannot be undone.")
+        }
+        .alert("Clear Listening History", isPresented: $showClearListeningHistoryAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                Haptics.warning()
+                recentlyPlayedManager.clearAll()
+            }
+        } message: {
+            Text("This clears Recently Played and Recently Added, which drive the personalized rows on the Search page.")
         }
     }
 
@@ -146,6 +158,130 @@ struct MoreView: View {
         }
     }
 
+    // MARK: - Backend
+
+    /// Server URL + API key overrides. The app is a client for a self-hosted
+    /// backend; with no server configured it runs as a local-files-only
+    /// player (the Search tab hides — see ContentView).
+    private var backendSection: some View {
+        MoreCard(title: "Backend", tokens: tokens) {
+            VStack(spacing: 0) {
+                HStack(spacing: DS.Spacing.md) {
+                    iconBadge(systemName: "server.rack", color: tokens.accent)
+                    TextField("Server URL (https://host:port)", text: $settingsManager.backendURLOverride)
+                        .font(DS.Typography.body)
+                        .foregroundColor(tokens.textPrimary)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                }
+                .padding(.horizontal, DS.Spacing.md)
+                .padding(.vertical, DS.Spacing.md)
+
+                Divider().background(tokens.hairline).padding(.leading, 56)
+
+                HStack(spacing: DS.Spacing.md) {
+                    iconBadge(systemName: "key", color: tokens.accent)
+                    SecureField("API key (optional)", text: $settingsManager.backendAPIKeyOverride)
+                        .font(DS.Typography.body)
+                        .foregroundColor(tokens.textPrimary)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                }
+                .padding(.horizontal, DS.Spacing.md)
+                .padding(.vertical, DS.Spacing.md)
+
+                Divider().background(tokens.hairline).padding(.leading, 56)
+
+                Button {
+                    Haptics.light()
+                    testConnection()
+                } label: {
+                    row(icon: "antenna.radiowaves.left.and.right", iconColor: tokens.accent,
+                        title: "Test Connection", isButton: true)
+                }
+                .buttonStyle(.plain)
+                .disabled(connectionTest.isLoading)
+
+                connectionStatusRow
+                    .padding(.horizontal, DS.Spacing.md)
+                    .padding(.bottom, DS.Spacing.md)
+            }
+        }
+        .onChange(of: settingsManager.backendURLOverride) { _ in
+            settingsManager.save()
+            playerManager.reconfigureBackend()
+            connectionTest = .idle
+        }
+        .onChange(of: settingsManager.backendAPIKeyOverride) { _ in
+            settingsManager.save()
+            playerManager.reconfigureBackend()
+            connectionTest = .idle
+        }
+    }
+
+    @ViewBuilder
+    private var connectionStatusRow: some View {
+        switch connectionTest {
+        case .idle:
+            Text(BackendConfig.isConfigured
+                 ? "Server: \(BackendConfig.baseURL)"
+                 : "No server configured — local library only")
+                .font(DS.Typography.caption)
+                .foregroundColor(tokens.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking \(BackendConfig.baseURL)…")
+                    .font(DS.Typography.caption)
+                    .foregroundColor(tokens.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .loaded(let message):
+            Label(message, systemImage: "checkmark.circle.fill")
+                .font(DS.Typography.caption)
+                .foregroundColor(.green)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .failed(let error):
+            Label(error.localizedDescription, systemImage: "xmark.octagon.fill")
+                .font(DS.Typography.caption)
+                .foregroundColor(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// GETs `/api/health` on the currently resolved backend with a short
+    /// timeout and reports the outcome inline.
+    private func testConnection() {
+        connectionTest = .loading
+        let base = BackendConfig.baseURL
+        let apiKey = BackendConfig.apiKey
+        Task {
+            do {
+                guard let url = URL(string: "\(base)/api/health") else {
+                    throw URLError(.badURL)
+                }
+                var request = URLRequest(url: url, timeoutInterval: 5)
+                if let apiKey {
+                    request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+                }
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                    throw URLError(.badServerResponse)
+                }
+                var message = "Connected"
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let version = json["yt_dlp_version"] as? String {
+                    message = "Connected · yt-dlp \(version)"
+                }
+                connectionTest = .loaded(message)
+            } catch {
+                connectionTest = .failed(error)
+            }
+        }
+    }
+
     // MARK: - Advanced
 
     private var advancedSection: some View {
@@ -176,6 +312,16 @@ struct MoreView: View {
                     showDeletePlaylistsAlert = true
                 } label: {
                     row(icon: "trash", iconColor: .red, title: "Delete All Playlists", isButton: true)
+                }
+                .buttonStyle(.plain)
+
+                Divider().background(tokens.hairline).padding(.leading, 56)
+
+                Button {
+                    Haptics.warning()
+                    showClearListeningHistoryAlert = true
+                } label: {
+                    row(icon: "clock.arrow.circlepath", iconColor: .orange, title: "Clear Listening History", isButton: true)
                 }
                 .buttonStyle(.plain)
             }

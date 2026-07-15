@@ -39,6 +39,15 @@ final class RecentlyPlayedManager: ObservableObject {
         addedDebouncer?.flush()
     }
 
+    /// Wipes both lists (More → Clear Listening History). Saves go through the
+    /// usual debounced path.
+    func clearAll() {
+        recentlyPlayed.removeAll()
+        recentlyAdded.removeAll()
+        savePlayed()
+        saveAdded()
+    }
+
     func trackPlayed(_ track: Track) {
         recentlyPlayed.removeAll { $0.id == track.id }
         recentlyPlayed.insert(track, at: 0)
