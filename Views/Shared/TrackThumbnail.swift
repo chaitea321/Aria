@@ -29,7 +29,6 @@ struct TrackThumbnail: View {
             ArtworkPlaceholder(tokens: tokens, cornerRadius: cornerRadius)
         }
         .modifier(ThumbnailSizing(size: size))
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 

@@ -59,11 +59,7 @@ struct SearchView: View {
             case .loaded(let tracks):
                 resultsList(tracks)
             case .failed(let error):
-                resultsList([])
-                    .overlay(alignment: .top) {
-                        errorPill(error.localizedDescription)
-                            .padding(DS.Spacing.lg)
-                    }
+                searchErrorView(error)
             }
         }
     }
@@ -326,20 +322,43 @@ struct SearchView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    private func errorPill(_ message: String) -> some View {
-        HStack(spacing: DS.Spacing.sm) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-            Text(message)
-                .font(DS.Typography.caption)
+    /// Failed-search state: a distinct connectivity icon, the error message,
+    /// and a Retry button that re-runs the current query. Replaces the old
+    /// overlay-a-pill-over-"No matches" treatment, which showed two
+    /// contradictory messages at once.
+    private func searchErrorView(_ error: Error) -> some View {
+        VStack(spacing: DS.Spacing.md) {
+            ZStack {
+                Circle()
+                    .fill(tokens.surface)
+                    .frame(width: 96, height: 96)
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(tokens.textSecondary)
+            }
+            Text("Something went wrong")
+                .font(DS.Typography.titleMedium)
                 .foregroundColor(tokens.textPrimary)
-            Spacer()
+            Text(error.localizedDescription)
+                .font(DS.Typography.caption)
+                .foregroundColor(tokens.textSecondary)
+                .multilineTextAlignment(.center)
+            Button {
+                Haptics.light()
+                Task { await runSearch(for: query) }
+            } label: {
+                Text("Retry")
+                    .font(DS.Typography.bodyEm)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, DS.Spacing.lg)
+                    .padding(.vertical, DS.Spacing.sm)
+                    .background(Capsule().fill(tokens.accent))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, DS.Spacing.sm)
         }
-        .padding(DS.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                .fill(Color.orange.opacity(0.12))
-        )
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, DS.Spacing.lg)
     }
 
     private var skeletonRow: some View {
@@ -376,7 +395,7 @@ struct SearchView: View {
                 .foregroundColor(tokens.textSecondary)
             Spacer(minLength: 40)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 360)
     }
 
     // MARK: - Track Cards

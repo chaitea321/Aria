@@ -225,18 +225,20 @@ struct FavoritesView: View {
     /// track (not the currently playing one).
     private func addToPlaylistSheet(for track: Track) -> some View {
         NavigationStack {
-            Group {
+            ZStack {
+                tokens.background.ignoresSafeArea()
+
                 if playlistsManager.playlists.isEmpty {
-                    VStack(spacing: 16) {
+                    VStack(spacing: DS.Spacing.lg) {
                         Image(systemName: "music.note.list")
                             .font(.system(size: 40))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(tokens.textSecondary)
                         Text("No Playlists")
-                            .font(.title3)
-                            .fontWeight(.semibold)
+                            .font(DS.Typography.titleMedium)
+                            .foregroundColor(tokens.textPrimary)
                         Text("Create a playlist first")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .font(DS.Typography.body)
+                            .foregroundColor(tokens.textSecondary)
                     }
                 } else {
                     List(playlistsManager.playlists) { playlist in
@@ -246,19 +248,23 @@ struct FavoritesView: View {
                             addToPlaylistTrack = nil
                         } label: {
                             HStack {
-                                VStack(alignment: .leading) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(playlist.name)
-                                        .font(.body)
-                                    Text("\(playlist.tracks.count) tracks")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                        .font(DS.Typography.bodyEm)
+                                        .foregroundColor(tokens.textPrimary)
+                                    Text("\(playlist.tracks.count) track\(playlist.tracks.count == 1 ? "" : "s")")
+                                        .font(DS.Typography.caption)
+                                        .foregroundColor(tokens.textSecondary)
                                 }
                                 Spacer()
                                 Image(systemName: "plus.circle")
-                                    .foregroundColor(themeManager.theme.accentColor)
+                                    .foregroundColor(tokens.accent)
                             }
                         }
+                        .listRowBackground(tokens.background)
                     }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
             .navigationTitle("Add to Playlist")

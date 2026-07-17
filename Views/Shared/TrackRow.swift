@@ -6,39 +6,56 @@ struct NowPlayingIndicator: View {
     let isPlaying: Bool
     let accent: Color
 
-    @State private var phase: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Full (tallest) height per bar; each pulses on its own staggered timeline.
+    private let fullHeights: [CGFloat] = [8, 14, 10]
+    private let delays: [Double] = [0, 0.2, 0.4]
 
     var body: some View {
         HStack(alignment: .center, spacing: 2) {
-            bar(height: 8, phase: phase)
-            bar(height: 14, phase: phase + 0.2)
-            bar(height: 10, phase: phase + 0.4)
+            ForEach(0..<fullHeights.count, id: \.self) { i in
+                Bar(fullHeight: fullHeights[i], delay: delays[i], accent: accent,
+                    animating: isPlaying && !reduceMotion)
+            }
         }
         .frame(width: 14, height: 14)
         // Purely decorative — the now-playing state is announced on the row
         // label instead, so keep this out of the VoiceOver tree.
         .accessibilityHidden(true)
-        .onAppear { startAnimating() }
-        .onChange(of: isPlaying) { newValue in
-            if newValue { startAnimating() } else { phase = 0 }
-        }
     }
 
-    private func startAnimating() {
-        guard isPlaying else { return }
-        // Honor Reduce Motion: hold the bars at a fixed mid-height instead of
-        // an endlessly repeating animation.
-        guard !reduceMotion else { phase = 0.5; return }
-        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
-            phase = 1
-        }
-    }
+    /// One bar. Pulses its vertical scale between two DISTINCT values so SwiftUI
+    /// interpolates it over time — a function whose animated endpoints coincide
+    /// (e.g. abs(sin(phase·π))) renders as a static bar and never moves.
+    private struct Bar: View {
+        let fullHeight: CGFloat
+        let delay: Double
+        let accent: Color
+        let animating: Bool
 
-    private func bar(height: CGFloat, phase: CGFloat) -> some View {
-        Capsule()
-            .fill(accent)
-            .frame(width: 2.5, height: height)
+        @State private var scaleY: CGFloat = 0.45
+
+        var body: some View {
+            Capsule()
+                .fill(accent)
+                .frame(width: 2.5, height: fullHeight)
+                .scaleEffect(y: scaleY, anchor: .center)
+                .onAppear { apply(animating) }
+                .onChange(of: animating) { apply($0) }
+        }
+
+        private func apply(_ on: Bool) {
+            if on {
+                scaleY = 0.45
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(delay)) {
+                    scaleY = 1.0
+                }
+            } else {
+                // Reduce Motion / not playing: hold at a fixed mid-height.
+                withAnimation(.easeInOut(duration: 0.2)) { scaleY = 0.7 }
+            }
+        }
     }
 }
 

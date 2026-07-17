@@ -52,6 +52,7 @@ struct MiniPlayerView: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityHint("Opens the full screen player")
     }
 
     /// Thin playback-progress bar pinned to the top edge of the mini player.

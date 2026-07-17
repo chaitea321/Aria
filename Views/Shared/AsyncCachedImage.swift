@@ -50,8 +50,9 @@ final class ImageMemoryCache {
     }
 }
 
-/// SwiftUI image view with a memory cache. While loading, shows a
-/// `ShimmerView` placeholder. On success, crossfades into the image.
+/// SwiftUI image view with a memory cache. While loading (and if the load
+/// fails) it shows the caller-supplied placeholder, defaulting to
+/// `ArtworkPlaceholder`. On success, crossfades into the image.
 ///
 /// Artwork is decoded at `targetSize` (in points) rather than full
 /// resolution: source JPEGs from the YouTube CDN can be up to 1280x720,
@@ -75,8 +76,6 @@ struct AsyncCachedImage<Placeholder: View>: View {
     @ViewBuilder let placeholder: () -> Placeholder
 
     @State private var image: UIImage?
-    @State private var loadTask: Task<Void, Never>?
-    @State private var didFail: Bool = false
 
     init(
         url: URL?,
@@ -117,8 +116,8 @@ struct AsyncCachedImage<Placeholder: View>: View {
                         .transition(.opacity.animation(.easeIn(duration: 0.18)))
                 } else {
                     // Same view shown for both "loading" and "failed"
-                    // (`didFail`) states — the caller-supplied placeholder,
-                    // or by default `ArtworkPlaceholder` — so a missing or
+                    // states — the caller-supplied placeholder, or by
+                    // default `ArtworkPlaceholder` — so a missing or
                     // broken artwork URL still reads as "a track" rather
                     // than reverting to a blank box once loading gives up.
                     placeholder()
@@ -166,10 +165,6 @@ struct AsyncCachedImage<Placeholder: View>: View {
             } catch {
                 continue
             }
-        }
-
-        if !Task.isCancelled {
-            didFail = true
         }
     }
 

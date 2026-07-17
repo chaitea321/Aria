@@ -28,6 +28,8 @@ struct FullScreenPlayerView: View {
                         Image(systemName: "chevron.down")
                             .font(.title3)
                             .foregroundColor(themeManager.textPrimary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Close player")
 
@@ -36,26 +38,29 @@ struct FullScreenPlayerView: View {
                     Button {
                         nav.presentedSheet = .queue
                     } label: {
-                        if !playerManager.queue.isEmpty {
-                            ZStack(alignment: .topTrailing) {
+                        Group {
+                            if !playerManager.queue.isEmpty {
+                                ZStack(alignment: .topTrailing) {
+                                    Image(systemName: "list.bullet")
+                                        .font(.title3)
+                                        .foregroundColor(themeManager.textPrimary)
+                                    Text("\(playerManager.queue.count)")
+                                        .scaledFont(size: 10, weight: .bold, relativeTo: .caption2)
+                                        .foregroundColor(themeManager.theme.accentColor)
+                                        .offset(x: 10, y: -2)
+                                }
+                            } else {
                                 Image(systemName: "list.bullet")
                                     .font(.title3)
-                                    .foregroundColor(themeManager.textPrimary)
-                                Text("\(playerManager.queue.count)")
-                                    .scaledFont(size: 10, weight: .bold, relativeTo: .caption2)
-                                    .foregroundColor(themeManager.theme.accentColor)
-                                    .offset(x: 10, y: -2)
+                                    .foregroundColor(themeManager.textSecondary)
                             }
-                        } else {
-                            Image(systemName: "list.bullet")
-                                .font(.title3)
-                                .foregroundColor(themeManager.textSecondary)
                         }
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                     }
-                    .accessibilityLabel("Show queue")
+                    .accessibilityLabel(playerManager.queue.isEmpty ? "Show queue" : "Show queue, \(playerManager.queue.count) up next")
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 8)
+                .padding(.top, DS.Spacing.sm)
                 .padding(.bottom, 20)
 
                 if let track = playerManager.currentTrack {
@@ -73,13 +78,12 @@ struct FullScreenPlayerView: View {
                 } else {
                     Spacer()
                     Text("No track playing")
-                        .foregroundColor(.secondary)
-                    Spacer()
+                        .foregroundColor(themeManager.textSecondary)
                 }
 
                 Spacer()
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, DS.Spacing.xl)
         }
         .offset(y: dragOffset)
         .gesture(
@@ -120,19 +124,19 @@ struct FullScreenPlayerView: View {
         return Group {
             if let url = playerManager.currentArtworkURL {
                 AsyncCachedImage(url: url, targetSize: side) {
-                    ArtworkPlaceholder(tokens: themeManager.tokens, cornerRadius: 12)
+                    ArtworkPlaceholder(tokens: themeManager.tokens, cornerRadius: DS.Radius.md)
                 }
                 .aspectRatio(contentMode: .fit)
                 .frame(width: side, height: side)
-                .cornerRadius(12)
+                .cornerRadius(DS.Radius.md)
                 .shadow(color: .black.opacity(0.3), radius: 16, y: 4)
             } else {
-                ArtworkPlaceholder(tokens: themeManager.tokens, cornerRadius: 12)
+                ArtworkPlaceholder(tokens: themeManager.tokens, cornerRadius: DS.Radius.md)
                     .frame(width: side, height: side)
-                    .cornerRadius(12)
+                    .cornerRadius(DS.Radius.md)
             }
         }
-        .padding(.bottom, 24)
+        .padding(.bottom, DS.Spacing.xl)
     }
 
     // MARK: - Track Info
@@ -150,7 +154,7 @@ struct FullScreenPlayerView: View {
                 .font(.body)
                 .foregroundColor(themeManager.textSecondary)
         }
-        .padding(.bottom, 16)
+        .padding(.bottom, DS.Spacing.lg)
     }
 
     // MARK: - Seek Bar
@@ -200,11 +204,13 @@ struct FullScreenPlayerView: View {
     // MARK: - Transport Controls
 
     private var transportControls: some View {
-        HStack(spacing: 32) {
+        HStack(spacing: DS.Spacing.xxl) {
             Button { playerManager.toggleShuffle() } label: {
                 Image(systemName: "shuffle")
                     .font(.title3)
                     .foregroundColor(playerManager.isShuffled ? themeManager.theme.accentColor : themeManager.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel(playerManager.isShuffled ? "Shuffle on" : "Shuffle off")
 
@@ -212,6 +218,8 @@ struct FullScreenPlayerView: View {
                 Image(systemName: "backward.fill")
                     .font(.title)
                     .foregroundColor(themeManager.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Previous track")
 
@@ -226,6 +234,8 @@ struct FullScreenPlayerView: View {
                 Image(systemName: "forward.fill")
                     .font(.title)
                     .foregroundColor(themeManager.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Next track")
 
@@ -233,10 +243,12 @@ struct FullScreenPlayerView: View {
                 Image(systemName: repeatIcon)
                     .font(.title3)
                     .foregroundColor(playerManager.repeatMode != .off ? themeManager.theme.accentColor : themeManager.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Repeat mode: \(playerManager.repeatMode == .off ? "off" : playerManager.repeatMode == .one ? "one" : "all")")
         }
-        .padding(.bottom, 24)
+        .padding(.bottom, DS.Spacing.xl)
     }
 
     private var repeatIcon: String {
@@ -261,6 +273,7 @@ struct FullScreenPlayerView: View {
                     .font(.title3)
                     .foregroundColor(favoritesManager.isFavorite(track) ? .red : themeManager.textPrimary)
             }
+            .accessibilityLabel(favoritesManager.isFavorite(track) ? "Remove from favorites" : "Add to favorites")
 
             DownloadButton(track: track)
 
@@ -269,12 +282,14 @@ struct FullScreenPlayerView: View {
                     .font(.title3)
                     .foregroundColor(themeManager.textPrimary)
             }
+            .accessibilityLabel("Add to playlist")
 
             Button { nav.presentedSheet = .equalizer } label: {
                 Image(systemName: "slider.horizontal.3")
                     .font(.title3)
                     .foregroundColor(themeManager.textPrimary)
             }
+            .accessibilityLabel("Equalizer")
 
             Menu {
                 ForEach(PlayerManager.playbackRatePresets, id: \.self) { rate in
@@ -300,29 +315,27 @@ struct FullScreenPlayerView: View {
             .accessibilityLabel("Playback speed")
             .accessibilityValue(speedLabel(playerManager.playbackRate))
 
-            if let track = playerManager.currentTrack {
-                // Share the actual song (watch URL), not the thumbnail image;
-                // local files fall back to a "title — artist" text share.
-                if let url = track.shareURL {
-                    ShareLink(
-                        item: url,
-                        subject: Text(track.title),
-                        message: Text("\(track.title) — \(track.artist)")
-                    ) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.title3)
-                            .foregroundColor(themeManager.textPrimary)
-                    }
-                } else {
-                    ShareLink(item: "\(track.title) — \(track.artist)") {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.title3)
-                            .foregroundColor(themeManager.textPrimary)
-                    }
+            // Share the actual song (watch URL), not the thumbnail image;
+            // local files fall back to a "title — artist" text share.
+            if let url = track.shareURL {
+                ShareLink(
+                    item: url,
+                    subject: Text(track.title),
+                    message: Text("\(track.title) — \(track.artist)")
+                ) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title3)
+                        .foregroundColor(themeManager.textPrimary)
+                }
+            } else {
+                ShareLink(item: "\(track.title) — \(track.artist)") {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title3)
+                        .foregroundColor(themeManager.textPrimary)
                 }
             }
         }
-        .padding(.bottom, 32)
+        .padding(.bottom, DS.Spacing.xxl)
     }
 
     /// "1×", "0.5×", "1.25×" — `%g` trims trailing zeros.

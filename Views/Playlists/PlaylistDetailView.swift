@@ -114,7 +114,7 @@ struct PlaylistDetailView: View {
                     .font(DS.Typography.titleLarge)
                     .foregroundColor(tokens.textPrimary)
                     .multilineTextAlignment(.center)
-                Text("\(currentPlaylist.tracks.count) tracks")
+                Text("\(currentPlaylist.tracks.count) track\(currentPlaylist.tracks.count == 1 ? "" : "s")")
                     .font(DS.Typography.caption)
                     .foregroundColor(tokens.textSecondary)
             }
