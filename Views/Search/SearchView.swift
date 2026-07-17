@@ -64,6 +64,16 @@ struct SearchView: View {
         }
     }
 
+    /// Drops the search keyboard so it doesn't cover the mini player after a
+    /// song is tapped without first pressing Search. The `.searchable` field
+    /// doesn't reliably honor the focus binding on iOS 16, so resign first
+    /// responder as well.
+    private func dismissKeyboard() {
+        isSearchFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     private var idleHint: some View {
         VStack(spacing: DS.Spacing.md) {
             Spacer(minLength: 40)
@@ -251,6 +261,7 @@ struct SearchView: View {
                 ForEach(tracks) { track in
                     let isCurrent = playerManager.currentTrack?.id == track.id
                     Button {
+                        dismissKeyboard()
                         Haptics.light()
                         // Start an endless "similar songs" radio seeded from the
                         // tapped result instead of queuing the raw search list.
@@ -417,6 +428,7 @@ struct SearchView: View {
 
     private func trackCard(_ track: Track) -> some View {
         Button {
+            dismissKeyboard()
             Haptics.light()
             playerManager.playRadio(seed: track)
             recentlyPlayedManager.trackPlayed(track)
@@ -448,6 +460,7 @@ struct SearchView: View {
 
     private func tileCard(_ track: Track) -> some View {
         Button {
+            dismissKeyboard()
             Haptics.light()
             playerManager.playRadio(seed: track)
             recentlyPlayedManager.trackPlayed(track)
