@@ -37,7 +37,6 @@ struct PlaylistsView: View {
                         .padding(.top, DS.Spacing.md)
 
                     recentPlaylistsSection
-                        .padding(.top, DS.Spacing.lg)
 
                     tabPicker
                         .padding(.horizontal, DS.Spacing.lg)
@@ -54,7 +53,7 @@ struct PlaylistsView: View {
         }
         .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
             TextField("Playlist name", text: $newPlaylistName)
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { newPlaylistName = "" }
             Button("Create") {
                 let trimmed = newPlaylistName.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.isEmpty else { return }
@@ -153,6 +152,7 @@ struct PlaylistsView: View {
             if !playlistsManager.recentlyPlayedPlaylists.isEmpty {
                 SectionLabel(title: "Recently played", tokens: tokens)
                     .padding(.horizontal, DS.Spacing.lg)
+                    .padding(.top, DS.Spacing.lg)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: DS.Spacing.md) {
@@ -211,7 +211,7 @@ struct PlaylistsView: View {
                     .lineLimit(1)
                     .frame(width: 130, alignment: .leading)
 
-                Text("\(playlist.tracks.count) tracks")
+                Text("\(playlist.tracks.count) track\(playlist.tracks.count == 1 ? "" : "s")")
                     .font(DS.Typography.caption)
                     .foregroundColor(tokens.textSecondary)
                     .frame(width: 130, alignment: .leading)
@@ -407,7 +407,7 @@ struct PlaylistsView: View {
                     Text(playlist.name)
                         .font(DS.Typography.bodyEm)
                         .foregroundColor(tokens.textPrimary)
-                    Text("\(playlist.tracks.count) tracks")
+                    Text("\(playlist.tracks.count) track\(playlist.tracks.count == 1 ? "" : "s")")
                         .font(DS.Typography.caption)
                         .foregroundColor(tokens.textSecondary)
                 }

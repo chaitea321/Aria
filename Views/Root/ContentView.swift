@@ -14,6 +14,10 @@ struct ContentView: View {
     @State private var selectedTab: AppTab
     @State private var showFullPlayer = false
     @State private var errorBanner: String?
+    /// Single in-flight auto-dismiss timer for the error banner. Held so a
+    /// newer error can cancel the previous timer before arming its own —
+    /// otherwise an older 4s timer would clear the newer banner early.
+    @State private var bannerDismiss: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -66,7 +70,7 @@ struct ContentView: View {
         }
         .overlay(alignment: .top) {
             if let msg = errorBanner {
-                HStack(spacing: 8) {
+                HStack(spacing: DS.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
                     Text(msg)
@@ -75,14 +79,14 @@ struct ContentView: View {
                         .lineLimit(2)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, DS.Spacing.lg)
+                .padding(.vertical, DS.Spacing.md)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color.black.opacity(0.85))
                 )
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .padding(.horizontal, DS.Spacing.lg)
+                .padding(.top, DS.Spacing.sm)
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .zIndex(200)
             }
@@ -96,20 +100,14 @@ struct ContentView: View {
             }
             guard let msg = message else { return }
             withAnimation(.spring(response: 0.3)) { errorBanner = msg }
-            Task {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                withAnimation { errorBanner = nil }
-                playerManager.playerError = nil
-            }
+            bannerDismiss?.cancel()
+            bannerDismiss = Task { await dismissBanner() }
         }
         .onChange(of: downloadManager.lastError) { msg in
             guard let msg else { return }
             withAnimation(.spring(response: 0.3)) { errorBanner = msg }
-            Task {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                withAnimation { errorBanner = nil }
-                downloadManager.lastError = nil
-            }
+            bannerDismiss?.cancel()
+            bannerDismiss = Task { await dismissBanner() }
         }
         .preferredColorScheme(themeManager.isDarkMode ? .dark : .light)
         .onChange(of: settingsManager.defaultStartTab) { newValue in
@@ -163,6 +161,18 @@ struct ContentView: View {
         playerManager.flushPendingWrites()
     }
 
+    /// Hides the error banner after a delay, then clears BOTH error sources.
+    /// The banner shows one error at a time, so a source that was superseded by
+    /// a newer error must still be cleared here — otherwise its property stays
+    /// set and an identical repeat error wouldn't re-fire `onChange`.
+    private func dismissBanner() async {
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        guard !Task.isCancelled else { return }
+        withAnimation { errorBanner = nil }
+        playerManager.playerError = nil
+        downloadManager.lastError = nil
+    }
+
     // MARK: - Tab Content
 
     @ViewBuilder
@@ -193,7 +203,7 @@ struct ContentView: View {
             }
             tabBarButton(tab: .more, icon: "ellipsis", label: "More")
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, DS.Spacing.xs)
         .padding(.vertical, 6)
         .background(themeManager.surface)
     }
@@ -221,6 +231,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selectedTab == tab ? [.isSelected] : [])
     }
 }
 
