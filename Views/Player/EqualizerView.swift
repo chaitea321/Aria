@@ -9,7 +9,9 @@ struct EqualizerView: View {
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var state: EqualizerState
+    @State private var showAutoEQBrowser = false
     @State private var showAutoEQImporter = false
+    @State private var pendingFileImport = false
     @State private var showPaywall = false
     @State private var importError: String?
 
@@ -81,6 +83,19 @@ struct EqualizerView: View {
             if eq.parametric == nil && state.localBands != eq.bands {
                 playerManager.applyEQPreset(state.localBands)
             }
+        }
+        .sheet(isPresented: $showAutoEQBrowser, onDismiss: {
+            // The browser's folder button defers to the file importer; a sheet
+            // can't present another sheet, so chain it through onDismiss.
+            if pendingFileImport {
+                pendingFileImport = false
+                showAutoEQImporter = true
+            }
+        }) {
+            AutoEQBrowserView(
+                onApply: { playerManager.applyParametricEQ($0) },
+                onImportFile: { pendingFileImport = true }
+            )
         }
         .fileImporter(isPresented: $showAutoEQImporter,
                       allowedContentTypes: [.plainText, .text],
@@ -220,13 +235,14 @@ struct EqualizerView: View {
 
     // MARK: - AutoEQ (Pro)
 
-    /// Entry point for AutoEQ profile import. Locked behind Aria Pro — the
-    /// non-Pro tap opens the paywall instead of the file picker.
+    /// Entry point for AutoEQ profiles: opens the searchable headphone catalog
+    /// (with file import as its fallback). Locked behind Aria Pro — the
+    /// non-Pro tap opens the paywall instead.
     private var autoEQRow: some View {
         Button {
             Haptics.light()
             if proStore.isPro {
-                showAutoEQImporter = true
+                showAutoEQBrowser = true
             } else {
                 showPaywall = true
             }
@@ -234,7 +250,7 @@ struct EqualizerView: View {
             HStack(spacing: DS.Spacing.sm) {
                 Image(systemName: proStore.isPro ? "waveform.badge.plus" : "lock.fill")
                     .foregroundColor(themeManager.theme.accentColor)
-                Text("Import AutoEQ Profile")
+                Text("AutoEQ Profile")
                     .font(DS.Typography.captionStrong)
                     .foregroundColor(themeManager.textPrimary)
                 if !proStore.isPro {
@@ -256,8 +272,8 @@ struct EqualizerView: View {
         .buttonStyle(.plain)
         .padding(.vertical, DS.Spacing.sm)
         .accessibilityLabel(proStore.isPro
-                            ? "Import AutoEQ profile"
-                            : "Import AutoEQ profile, requires Aria Pro")
+                            ? "Choose an AutoEQ profile for your headphones"
+                            : "AutoEQ profile, requires Aria Pro")
     }
 
     /// Replaces the fader grid while an imported parametric curve is active.
