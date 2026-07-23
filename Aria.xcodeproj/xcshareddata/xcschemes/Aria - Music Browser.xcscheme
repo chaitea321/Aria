@@ -61,7 +61,7 @@
          </BuildableReference>
       </BuildableProductRunnable>
       <StoreKitConfigurationFileReference
-         identifier = "../../../Aria.storekit">
+         identifier = "../Aria.storekit">
       </StoreKitConfigurationFileReference>
    </LaunchAction>
    <ProfileAction
